@@ -67,6 +67,7 @@ data class WebhookItem(
     val aksi: String = "updateStatus",
     val statusBaru: String = "Berhasil",
     val includeTitle: Boolean = false,
+    val smartRetry: Boolean = true,
     val filterKeyword: String = "",
     val selectedPackages: List<String> = emptyList(),
     val enabled: Boolean = true
@@ -244,6 +245,7 @@ class MainActivity : ComponentActivity() {
                         aksi = obj.optString("aksi", "updateStatus"),
                         statusBaru = obj.optString("statusBaru", "Berhasil"),
                         includeTitle = obj.optBoolean("includeTitle", false),
+                        smartRetry = obj.optBoolean("smartRetry", true),
                         filterKeyword = obj.optString("filterKeyword", ""),
                         selectedPackages = pkgs,
                         enabled = obj.optBoolean("enabled", true)
@@ -266,6 +268,7 @@ class MainActivity : ComponentActivity() {
                 put("aksi", item.aksi)
                 put("statusBaru", item.statusBaru)
                 put("includeTitle", item.includeTitle)
+                put("smartRetry", item.smartRetry)
                 put("filterKeyword", item.filterKeyword)
                 put("enabled", item.enabled)
                 val pkgArr = JSONArray()
@@ -348,49 +351,103 @@ class MainActivity : ComponentActivity() {
         return bmp.asImageBitmap()
     }
 
-    private fun sendTestWebhook(
+    private fun sendCustomTestWebhook(
         item: WebhookItem,
+        customNotificationText: String,
         onFinish: (Int, String, String) -> Unit
     ) {
         executor.execute {
-            val payload = JSONObject().apply {
-                put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                put("kunciEntri", "Pembayaran QRIS Rp 15.123 berhasil diterima (Test ViaQRIS)")
-                put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-            }
-            var code = 0
-            var resp = ""
-            try {
-                val conn = (URL(item.url).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 15000
-                    readTimeout = 15000
-                    doOutput = true
-                    doInput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    setRequestProperty("Accept", "application/json")
-                    if (item.apiToken.isNotEmpty()) {
-                        setRequestProperty("X-API-Token", item.apiToken)
+            val extractedAmount = NominalParser.extractAmount(customNotificationText)
+            val cleanedText = NominalParser.cleanLongTransactionIds(customNotificationText)
+
+            val candidates = mutableListOf<Pair<String, JSONObject>>()
+            candidates.add(
+                "1. Teks Asli + harga_transaksi" to JSONObject().apply {
+                    put("aksi", item.aksi.ifEmpty { "updateStatus" })
+                    put("kunciEntri", customNotificationText)
+                    put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
+                    if (extractedAmount != null) put("harga_transaksi", extractedAmount)
+                }
+            )
+
+            if (item.smartRetry && extractedAmount != null) {
+                if (cleanedText != customNotificationText) {
+                    candidates.add(
+                        "2. Teks Bersih (Tanpa ID Transaksi)" to JSONObject().apply {
+                            put("aksi", item.aksi.ifEmpty { "updateStatus" })
+                            put("kunciEntri", cleanedText)
+                            put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
+                            put("harga_transaksi", extractedAmount)
+                        }
+                    )
+                }
+                val dots = NominalParser.formatRupiahDots(extractedAmount)
+                candidates.add(
+                    "3. Format Rp Titik" to JSONObject().apply {
+                        put("aksi", item.aksi.ifEmpty { "updateStatus" })
+                        put("kunciEntri", "Rp $dots")
+                        put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
+                        put("harga_transaksi", extractedAmount)
                     }
-                }
-                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
-                    it.write(payload.toString())
-                    it.flush()
-                }
-                code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                if (stream != null) {
-                    BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use {
-                        resp = it.readText().take(400)
+                )
+                candidates.add(
+                    "4. Nominal Angka Murni" to JSONObject().apply {
+                        put("aksi", item.aksi.ifEmpty { "updateStatus" })
+                        put("kunciEntri", extractedAmount.toString())
+                        put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
+                        put("harga_transaksi", extractedAmount)
                     }
-                }
-                conn.disconnect()
-            } catch (e: Exception) {
-                code = -1
-                resp = e.message ?: "Network Error"
+                )
             }
-            val prettyJson = payload.toString(2)
-            mainHandler.post { onFinish(code, prettyJson, resp) }
+
+            val logReport = StringBuilder()
+            var lastCode = 0
+            var lastPayload = ""
+
+            for ((modeTitle, payload) in candidates) {
+                var code = 0
+                var resp = ""
+                try {
+                    val conn = (URL(item.url).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        connectTimeout = 15000
+                        readTimeout = 15000
+                        doOutput = true
+                        doInput = true
+                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                        setRequestProperty("Accept", "application/json")
+                        if (item.apiToken.isNotEmpty()) {
+                            setRequestProperty("X-API-Token", item.apiToken)
+                        }
+                    }
+                    OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
+                        it.write(payload.toString())
+                        it.flush()
+                    }
+                    code = conn.responseCode
+                    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                    if (stream != null) {
+                        BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use {
+                            resp = it.readText().take(300)
+                        }
+                    }
+                    conn.disconnect()
+                } catch (e: Exception) {
+                    code = -1
+                    resp = e.message ?: "Network Error"
+                }
+
+                lastCode = code
+                lastPayload = payload.toString(2)
+                logReport.append("[$modeTitle] -> HTTP $code\n")
+                logReport.append("Resp: ${resp.ifEmpty { "(Kosong)" }}\n\n")
+
+                if (code in 200..299 || code != 404) {
+                    break
+                }
+            }
+
+            mainHandler.post { onFinish(lastCode, lastPayload, logReport.toString().trim()) }
         }
     }
 
@@ -400,7 +457,12 @@ class MainActivity : ComponentActivity() {
         var editingWebhook by remember { mutableStateOf<WebhookItem?>(null) }
         var editingIndex by remember { mutableIntStateOf(-1) }
         var showForm by remember { mutableStateOf(false) }
-        var testDialogData by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
+
+        var testTargetWebhook by remember { mutableStateOf<WebhookItem?>(null) }
+        var customTestText by remember {
+            mutableStateOf("Pembayaran sebesar Rp2.014 telah diterima pada transaksi 165579415441005828.")
+        }
+        var testDialogResult by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
 
         if (showForm) {
             WebhookFormScreen(
@@ -474,10 +536,7 @@ class MainActivity : ComponentActivity() {
                         showForm = true
                     },
                     onTest = { item ->
-                        Toast.makeText(this, "Mengirim test webhook...", Toast.LENGTH_SHORT).show()
-                        sendTestWebhook(item) { code, sent, resp ->
-                            testDialogData = Triple(code, sent, resp)
-                        }
+                        testTargetWebhook = item
                     }
                 )
             } else {
@@ -485,21 +544,73 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        testDialogData?.let { (code, sentPayload, serverResp) ->
+        // Dialog Input Teks/Nominal sebelum Test Kirim
+        testTargetWebhook?.let { target ->
+            val detectedNominal = NominalParser.extractAmount(customTestText)
             AlertDialog(
-                onDismissRequest = { testDialogData = null },
-                title = { Text("Response Server ($code)") },
+                onDismissRequest = { testTargetWebhook = null },
+                title = { Text("Simulasi Test Kirim") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Masukkan teks notifikasi atau nominal sesuai tagihan Pending yang sedang aktif di PHPNuxBill (Siang/Sore hari):",
+                            fontSize = 12.sp
+                        )
+                        OutlinedTextField(
+                            value = customTestText,
+                            onValueChange = { customTestText = it },
+                            label = { Text("Isi Notifikasi Simulasi") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            text = if (detectedNominal != null)
+                                "Nominal Rp Terdeteksi: Rp $detectedNominal"
+                            else
+                                "Nominal Rp belum terdeteksi (Pastikan ada kata Rp...)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (detectedNominal != null) Color(0xFF2E7D32) else Color(0xFFC62828)
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val itemToTest = target
+                            testTargetWebhook = null
+                            Toast.makeText(this, "Mengirim test...", Toast.LENGTH_SHORT).show()
+                            sendCustomTestWebhook(itemToTest, customTestText) { code, sent, resp ->
+                                testDialogResult = Triple(code, sent, resp)
+                            }
+                        }
+                    ) {
+                        Text("Kirim Sekarang")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { testTargetWebhook = null }) {
+                        Text("Batal")
+                    }
+                }
+            )
+        }
+
+        // Dialog Hasil Test Kirim
+        testDialogResult?.let { (code, sentPayload, report) ->
+            AlertDialog(
+                onDismissRequest = { testDialogResult = null },
+                title = { Text("Hasil Test ($code)") },
                 text = {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         Text(
-                            text = "Payload Terkirim:\n$sentPayload\n\nResponse:\n${serverResp.ifEmpty { "(Kosong)" }}",
+                            text = "Payload Terakhir:\n$sentPayload\n\nRiwayat Percobaan:\n$report",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp
                         )
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { testDialogData = null }) {
+                    TextButton(onClick = { testDialogResult = null }) {
                         Text("Tutup")
                     }
                 }
@@ -578,7 +689,7 @@ class MainActivity : ComponentActivity() {
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "${item.selectedPackages.size} Aplikasi Dipilih • Aksi: ${item.aksi} • Status: ${item.statusBaru}",
+                                text = "${item.selectedPackages.size} App • Smart Retry: ${if (item.smartRetry) "ON" else "OFF"}",
                                 fontSize = 12.sp,
                                 color = Color.DarkGray
                             )
@@ -792,6 +903,7 @@ class MainActivity : ComponentActivity() {
         var aksi by remember { mutableStateOf(initial?.aksi ?: "updateStatus") }
         var statusBaru by remember { mutableStateOf(initial?.statusBaru ?: "Berhasil") }
         var includeTitle by remember { mutableStateOf(initial?.includeTitle ?: false) }
+        var smartRetry by remember { mutableStateOf(initial?.smartRetry ?: true) }
         var filterKeyword by remember { mutableStateOf(initial?.filterKeyword ?: "") }
         var selectedPackages by remember {
             mutableStateOf(initial?.selectedPackages?.toSet() ?: emptySet())
@@ -904,9 +1016,24 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
+                        Text("Smart Multi-Fallback & Auto-Extract Rp", fontWeight = FontWeight.Medium)
+                        Text(
+                            "Otomatis mengekstrak nominal Rp, mengirim harga_transaksi, & membuang ID transaksi panjang jika 404",
+                            fontSize = 12.sp,
+                            color = Color.Gray
+                        )
+                    }
+                    Switch(checked = smartRetry, onCheckedChange = { smartRetry = it })
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("Sertakan Judul Notifikasi di 'kunciEntri'", fontWeight = FontWeight.Medium)
                         Text(
-                            "Jika mati: hanya mengirim isi teks notifikasi payment (Direkomendasikan)",
+                            "Jika mati: hanya mengirim isi teks notifikasi payment",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
@@ -950,6 +1077,7 @@ class MainActivity : ComponentActivity() {
                                 aksi = aksi.trim().ifEmpty { "updateStatus" },
                                 statusBaru = statusBaru.trim().ifEmpty { "Berhasil" },
                                 includeTitle = includeTitle,
+                                smartRetry = smartRetry,
                                 filterKeyword = filterKeyword.trim(),
                                 selectedPackages = selectedPackages.toList(),
                                 enabled = initial?.enabled ?: true
