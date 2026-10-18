@@ -52,50 +52,37 @@ object NominalParser {
         val trimmedNoDot = rawText.trim().trimEnd('.')
         val list = mutableListOf<Pair<String, JSONObject>>()
 
-        // 1. Format Murni (100% Identik MacroDroid: hanya aksi, kunciEntri, statusBaru)
+        if (smartRetry && amount != null) {
+            val amountStr = amount.toString()
+
+            // 1. Prioritas Utama: Kirim harga_transaksi (Langsung eksekusi di server)
+            list.add(
+                "Nominal Otomatis (harga_transaksi)" to JSONObject().apply {
+                    put("aksi", aksi)
+                    put("harga_transaksi", amountStr)
+                    put("statusBaru", statusBaru)
+                }
+            )
+
+            // 2. Cadangan 1: Kirim kunciEntri tanpa titik akhir + harga_transaksi
+            list.add(
+                "Teks & Nominal" to JSONObject().apply {
+                    put("aksi", aksi)
+                    put("kunciEntri", trimmedNoDot)
+                    put("harga_transaksi", amountStr)
+                    put("statusBaru", statusBaru)
+                }
+            )
+        }
+
+        // 3. Cadangan Terakhir / Mode Manual: Kirim teks notifikasi utuh (kunciEntri)
         list.add(
-            "1. Standar MacroDroid" to JSONObject().apply {
+            "Teks Notifikasi (kunciEntri)" to JSONObject().apply {
                 put("aksi", aksi)
                 put("kunciEntri", rawText)
                 put("statusBaru", statusBaru)
             }
         )
-
-        if (smartRetry) {
-            // 2. Tanpa titik di ujung kalimat (Mengatasi perbedaan titik di notifikasi ShopeePay asli)
-            if (trimmedNoDot != rawText) {
-                list.add(
-                    "2. Tanpa Titik Akhir" to JSONObject().apply {
-                        put("aksi", aksi)
-                        put("kunciEntri", trimmedNoDot)
-                        put("statusBaru", statusBaru)
-                    }
-                )
-            }
-
-            if (amount != null) {
-                val amountStr = amount.toString()
-
-                // 3. kunciEntri + harga_transaksi (String sesuai format updatedData server)
-                list.add(
-                    "3. kunciEntri + harga_transaksi" to JSONObject().apply {
-                        put("aksi", aksi)
-                        put("kunciEntri", trimmedNoDot)
-                        put("harga_transaksi", amountStr)
-                        put("statusBaru", statusBaru)
-                    }
-                )
-
-                // 4. Hanya harga_transaksi (String)
-                list.add(
-                    "4. Hanya harga_transaksi" to JSONObject().apply {
-                        put("aksi", aksi)
-                        put("harga_transaksi", amountStr)
-                        put("statusBaru", statusBaru)
-                    }
-                )
-            }
-        }
 
         return list
     }
@@ -160,10 +147,10 @@ class WebhookNotificationListener : NotificationListenerService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     CHANNEL_ID,
-                    "ViaQRIS Webhook Service",
+                    "Layanan ViaQRIS Webhook",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
-                    description = "Menjaga pemantauan notifikasi pembayaran tetap aktif 24 jam"
+                    description = "Menjaga pemantauan notifikasi pembayaran tetap berjalan di latar belakang"
                     setShowBadge(false)
                 }
                 manager.createNotificationChannel(channel)
@@ -179,9 +166,9 @@ class WebhookNotificationListener : NotificationListenerService() {
             val pendingIntent = PendingIntent.getActivity(this, 0, openAppIntent, pendingFlags)
 
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("ViaQRIS Webhook Aktif (24 Jam)")
-                .setContentText("Memantau notifikasi pembayaran secara real-time...")
-                .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
+                .setContentTitle("ViaQRIS Webhook Aktif")
+                .setContentText("Layanan penerus notifikasi pembayaran sedang berjalan")
+                .setSmallIcon(R.drawable.ic_launcher)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -335,7 +322,7 @@ class WebhookNotificationListener : NotificationListenerService() {
         val isSuccess = finalCode in 200..299
         incrementWebhookCounter(webhookId, isSuccess)
 
-        val amountInfo = if (extractedAmount != null) " [Rp $extractedAmount | $usedMode]" else " [$usedMode]"
+        val amountInfo = if (extractedAmount != null) " [Rp $extractedAmount • $usedMode]" else " [$usedMode]"
         saveLog(
             webhookName = webhookName,
             packageName = packageName,
