@@ -21,19 +21,19 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 
 object NominalParser {
-    // Mengekstrak nominal uang tepat setelah kata "Rp" atau "IDR" (mengabaikan ID transaksi panjang)
+    // Mengekstrak nominal uang tepat setelah kata "Rp" atau "IDR"
     private val rpRegex = Regex(
         """(?:Rp\.?|IDR)\s*([0-9]{1,3}(?:[.,][0-9]{3})+|[0-9]+)(?:,[0-9]{1,2})?""",
         RegexOption.IGNORE_CASE
     )
-    private val longIdRegex = Regex("""\b\d{7,}\b""")
+    // Mengekstrak ID transaksi panjang (seperti 165579415441005828 di ShopeePay)
+    private val trxIdRegex = Regex("""\b([0-9]{8,25})\b""")
 
     fun extractAmount(text: String): Long? {
         val match = rpRegex.find(text)
@@ -44,12 +44,73 @@ object NominalParser {
         return null
     }
 
-    fun cleanLongTransactionIds(text: String): String {
-        return longIdRegex.replace(text, "").replace(Regex("""\s+"""), " ").trim()
+    fun extractTransactionId(text: String): String? {
+        return trxIdRegex.find(text)?.groupValues?.get(1)
     }
 
-    fun formatRupiahDots(amount: Long): String {
-        return NumberFormat.getNumberInstance(Locale("in", "ID")).format(amount)
+    fun buildSmartPayloads(
+        aksi: String,
+        statusBaru: String,
+        rawText: String,
+        smartRetry: Boolean
+    ): List<Pair<String, JSONObject>> {
+        val amount = extractAmount(rawText)
+        val trxId = extractTransactionId(rawText)
+        val list = mutableListOf<Pair<String, JSONObject>>()
+
+        if (smartRetry && amount != null) {
+            // 1. Hanya harga_transaksi (Number) TANPA kunciEntri -> agar server langsung pakai harga_transaksi
+            list.add(
+                "harga_transaksi (Int)" to JSONObject().apply {
+                    put("aksi", aksi)
+                    put("harga_transaksi", amount)
+                    put("statusBaru", statusBaru)
+                }
+            )
+
+            // 2. Hanya harga_transaksi (String) TANPA kunciEntri
+            list.add(
+                "harga_transaksi (String)" to JSONObject().apply {
+                    put("aksi", aksi)
+                    put("harga_transaksi", amount.toString())
+                    put("statusBaru", statusBaru)
+                }
+            )
+
+            // 3. Jika ada ID transaksi panjang, kirim ID transaksi di kunciEntri + harga_transaksi
+            if (!trxId.isNullOrEmpty()) {
+                list.add(
+                    "ID Trx + harga_transaksi" to JSONObject().apply {
+                        put("aksi", aksi)
+                        put("kunciEntri", trxId)
+                        put("harga_transaksi", amount)
+                        put("statusBaru", statusBaru)
+                    }
+                )
+            }
+
+            // 4. kunciEntri berisi nominal + harga_transaksi
+            list.add(
+                "kunciEntri Nominal + harga_transaksi" to JSONObject().apply {
+                    put("aksi", aksi)
+                    put("kunciEntri", amount.toString())
+                    put("harga_transaksi", amount)
+                    put("statusBaru", statusBaru)
+                }
+            )
+        }
+
+        // 5. Fallback ke teks asli lengkap
+        list.add(
+            "Teks Lengkap" to JSONObject().apply {
+                put("aksi", aksi)
+                put("kunciEntri", rawText)
+                if (amount != null) put("harga_transaksi", amount)
+                put("statusBaru", statusBaru)
+            }
+        )
+
+        return list
     }
 }
 
@@ -218,6 +279,7 @@ class WebhookNotificationListener : NotificationListenerService() {
                 bodyText
             }
 
+            val webhookId = webhook.optString("id", "")
             val webhookName = webhook.optString("name", "Webhook")
             val url = webhook.optString("url", "").trim()
             val apiToken = webhook.optString("apiToken", "").trim()
@@ -229,6 +291,7 @@ class WebhookNotificationListener : NotificationListenerService() {
 
             executor.execute {
                 sendSmartWebhook(
+                    webhookId = webhookId,
                     webhookName = webhookName,
                     targetUrl = url,
                     apiToken = apiToken,
@@ -243,6 +306,7 @@ class WebhookNotificationListener : NotificationListenerService() {
     }
 
     private fun sendSmartWebhook(
+        webhookId: String,
         webhookName: String,
         targetUrl: String,
         apiToken: String,
@@ -253,62 +317,16 @@ class WebhookNotificationListener : NotificationListenerService() {
         smartRetry: Boolean
     ) {
         val extractedAmount = NominalParser.extractAmount(rawKunciEntri)
-        val cleanedText = NominalParser.cleanLongTransactionIds(rawKunciEntri)
-
-        // Daftar kandidat payload yang akan dicoba secara berurutan jika mendapat 404
-        val candidates = mutableListOf<Pair<String, JSONObject>>()
-
-        // 1. Teks asli + harga_transaksi (jika nominal ditemukan)
-        candidates.add(
-            "Asli" to JSONObject().apply {
-                put("aksi", aksi)
-                put("kunciEntri", rawKunciEntri)
-                put("statusBaru", statusBaru)
-                if (extractedAmount != null) {
-                    put("harga_transaksi", extractedAmount)
-                }
-            }
+        val candidates = NominalParser.buildSmartPayloads(
+            aksi = aksi,
+            statusBaru = statusBaru,
+            rawText = rawKunciEntri,
+            smartRetry = smartRetry
         )
-
-        if (smartRetry && extractedAmount != null) {
-            // 2. Teks yang sudah dibersihkan dari ID transaksi 18 digit (khusus ShopeePay, dll.)
-            if (cleanedText != rawKunciEntri) {
-                candidates.add(
-                    "TanpaID" to JSONObject().apply {
-                        put("aksi", aksi)
-                        put("kunciEntri", cleanedText)
-                        put("statusBaru", statusBaru)
-                        put("harga_transaksi", extractedAmount)
-                    }
-                )
-            }
-
-            // 3. Format Rp dengan titik (contoh: "Rp 2.014")
-            val formattedDots = NominalParser.formatRupiahDots(extractedAmount)
-            candidates.add(
-                "RpTitik" to JSONObject().apply {
-                    put("aksi", aksi)
-                    put("kunciEntri", "Rp $formattedDots")
-                    put("statusBaru", statusBaru)
-                    put("harga_transaksi", extractedAmount)
-                }
-            )
-
-            // 4. Angka nominal murni (contoh: "2014")
-            candidates.add(
-                "NominalMurni" to JSONObject().apply {
-                    put("aksi", aksi)
-                    put("kunciEntri", extractedAmount.toString())
-                    put("statusBaru", statusBaru)
-                    put("harga_transaksi", extractedAmount)
-                }
-            )
-        }
 
         var finalCode = 0
         var finalResp = ""
-        var usedMode = "Asli"
-        var finalKunci = rawKunciEntri
+        var usedMode = ""
 
         for ((index, pair) in candidates.withIndex()) {
             val (modeName, jsonPayload) = pair
@@ -316,24 +334,25 @@ class WebhookNotificationListener : NotificationListenerService() {
             finalCode = code
             finalResp = resp
             usedMode = modeName
-            finalKunci = jsonPayload.optString("kunciEntri", rawKunciEntri)
 
-            // Jika sukses (200-299) atau error selain 404, hentikan percobaan ulang
             if (code in 200..299 || code != 404) {
                 break
             }
             if (index < candidates.size - 1) {
                 try {
-                    Thread.sleep(350)
+                    Thread.sleep(300)
                 } catch (_: Exception) {}
             }
         }
 
-        val amountInfo = if (extractedAmount != null) " [Rp $extractedAmount | Mode: $usedMode]" else ""
+        val isSuccess = finalCode in 200..299
+        incrementWebhookCounter(webhookId, isSuccess)
+
+        val amountInfo = if (extractedAmount != null) " [Rp $extractedAmount | $usedMode]" else " [$usedMode]"
         saveLog(
             webhookName = webhookName,
             packageName = packageName,
-            kunciEntri = "$finalKunci$amountInfo",
+            kunciEntri = "$rawKunciEntri$amountInfo",
             statusCode = finalCode,
             response = finalResp
         )
@@ -379,6 +398,26 @@ class WebhookNotificationListener : NotificationListenerService() {
             responseText = e.message ?: "Network Error"
         }
         return statusCode to responseText
+    }
+
+    private fun incrementWebhookCounter(webhookId: String, isSuccess: Boolean) {
+        if (webhookId.isEmpty()) return
+        try {
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            synchronized(this) {
+                val raw = prefs.getString("webhooks_json", "[]") ?: "[]"
+                val arr = JSONArray(raw)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    if (obj.optString("id") == webhookId) {
+                        val key = if (isSuccess) "successCount" else "failCount"
+                        obj.put(key, obj.optInt(key, 0) + 1)
+                        break
+                    }
+                }
+                prefs.edit().putString("webhooks_json", arr.toString()).apply()
+            }
+        } catch (_: Exception) {}
     }
 
     private fun saveLog(
