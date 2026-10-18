@@ -67,10 +67,11 @@ data class WebhookItem(
     val aksi: String = "updateStatus",
     val statusBaru: String = "Berhasil",
     val includeTitle: Boolean = false,
-    val smartRetry: Boolean = true,
     val filterKeyword: String = "",
     val selectedPackages: List<String> = emptyList(),
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val successCount: Int = 0,
+    val failCount: Int = 0
 )
 
 data class InstalledAppItem(
@@ -86,6 +87,7 @@ data class LogItem(
     val packageName: String,
     val kunciEntri: String,
     val statusCode: Int,
+    val status: String,
     val response: String
 )
 
@@ -245,10 +247,11 @@ class MainActivity : ComponentActivity() {
                         aksi = obj.optString("aksi", "updateStatus"),
                         statusBaru = obj.optString("statusBaru", "Berhasil"),
                         includeTitle = obj.optBoolean("includeTitle", false),
-                        smartRetry = obj.optBoolean("smartRetry", true),
                         filterKeyword = obj.optString("filterKeyword", ""),
                         selectedPackages = pkgs,
-                        enabled = obj.optBoolean("enabled", true)
+                        enabled = obj.optBoolean("enabled", true),
+                        successCount = obj.optInt("successCount", 0),
+                        failCount = obj.optInt("failCount", 0)
                     )
                 )
             }
@@ -268,9 +271,10 @@ class MainActivity : ComponentActivity() {
                 put("aksi", item.aksi)
                 put("statusBaru", item.statusBaru)
                 put("includeTitle", item.includeTitle)
-                put("smartRetry", item.smartRetry)
                 put("filterKeyword", item.filterKeyword)
                 put("enabled", item.enabled)
+                put("successCount", item.successCount)
+                put("failCount", item.failCount)
                 val pkgArr = JSONArray()
                 item.selectedPackages.forEach { pkgArr.put(it) }
                 put("selectedPackages", pkgArr)
@@ -299,6 +303,7 @@ class MainActivity : ComponentActivity() {
                         packageName = obj.optString("packageName", ""),
                         kunciEntri = obj.optString("kunciEntri", ""),
                         statusCode = obj.optInt("statusCode", 0),
+                        status = obj.optString("status", "GAGAL"),
                         response = obj.optString("response", "")
                     )
                 )
@@ -351,103 +356,51 @@ class MainActivity : ComponentActivity() {
         return bmp.asImageBitmap()
     }
 
-    private fun sendCustomTestWebhook(
+    private fun sendTestWebhook(
         item: WebhookItem,
-        customNotificationText: String,
+        customText: String,
         onFinish: (Int, String, String) -> Unit
     ) {
         executor.execute {
-            val extractedAmount = NominalParser.extractAmount(customNotificationText)
-            val cleanedText = NominalParser.cleanLongTransactionIds(customNotificationText)
-
-            val candidates = mutableListOf<Pair<String, JSONObject>>()
-            candidates.add(
-                "1. Teks Asli + harga_transaksi" to JSONObject().apply {
-                    put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                    put("kunciEntri", customNotificationText)
-                    put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                    if (extractedAmount != null) put("harga_transaksi", extractedAmount)
-                }
-            )
-
-            if (item.smartRetry && extractedAmount != null) {
-                if (cleanedText != customNotificationText) {
-                    candidates.add(
-                        "2. Teks Bersih (Tanpa ID Transaksi)" to JSONObject().apply {
-                            put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                            put("kunciEntri", cleanedText)
-                            put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                            put("harga_transaksi", extractedAmount)
-                        }
-                    )
-                }
-                val dots = NominalParser.formatRupiahDots(extractedAmount)
-                candidates.add(
-                    "3. Format Rp Titik" to JSONObject().apply {
-                        put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                        put("kunciEntri", "Rp $dots")
-                        put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                        put("harga_transaksi", extractedAmount)
-                    }
-                )
-                candidates.add(
-                    "4. Nominal Angka Murni" to JSONObject().apply {
-                        put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                        put("kunciEntri", extractedAmount.toString())
-                        put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                        put("harga_transaksi", extractedAmount)
-                    }
-                )
+            // Menggunakan struktur payload asli: "harga_transaksi"
+            val payload = JSONObject().apply {
+                put("aksi", item.aksi.ifEmpty { "updateStatus" })
+                put("harga_transaksi", customText)
+                put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
             }
-
-            val logReport = StringBuilder()
-            var lastCode = 0
-            var lastPayload = ""
-
-            for ((modeTitle, payload) in candidates) {
-                var code = 0
-                var resp = ""
-                try {
-                    val conn = (URL(item.url).openConnection() as HttpURLConnection).apply {
-                        requestMethod = "POST"
-                        connectTimeout = 15000
-                        readTimeout = 15000
-                        doOutput = true
-                        doInput = true
-                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                        setRequestProperty("Accept", "application/json")
-                        if (item.apiToken.isNotEmpty()) {
-                            setRequestProperty("X-API-Token", item.apiToken)
-                        }
+            var code = 0
+            var resp = ""
+            try {
+                val conn = (URL(item.url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 15000
+                    readTimeout = 15000
+                    doOutput = true
+                    doInput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("Accept", "application/json")
+                    if (item.apiToken.isNotEmpty()) {
+                        setRequestProperty("X-API-Token", item.apiToken)
                     }
-                    OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
-                        it.write(payload.toString())
-                        it.flush()
-                    }
-                    code = conn.responseCode
-                    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                    if (stream != null) {
-                        BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use {
-                            resp = it.readText().take(300)
-                        }
-                    }
-                    conn.disconnect()
-                } catch (e: Exception) {
-                    code = -1
-                    resp = e.message ?: "Network Error"
                 }
-
-                lastCode = code
-                lastPayload = payload.toString(2)
-                logReport.append("[$modeTitle] -> HTTP $code\n")
-                logReport.append("Resp: ${resp.ifEmpty { "(Kosong)" }}\n\n")
-
-                if (code in 200..299 || code != 404) {
-                    break
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
+                    it.write(payload.toString())
+                    it.flush()
                 }
+                code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                if (stream != null) {
+                    BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use {
+                        resp = it.readText().take(400)
+                    }
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                code = -1
+                resp = e.message ?: "Network Error"
             }
-
-            mainHandler.post { onFinish(lastCode, lastPayload, logReport.toString().trim()) }
+            val prettyJson = payload.toString(2)
+            mainHandler.post { onFinish(code, prettyJson, resp) }
         }
     }
 
@@ -459,10 +412,8 @@ class MainActivity : ComponentActivity() {
         var showForm by remember { mutableStateOf(false) }
 
         var testTargetWebhook by remember { mutableStateOf<WebhookItem?>(null) }
-        var customTestText by remember {
-            mutableStateOf("Pembayaran sebesar Rp2.014 telah diterima pada transaksi 165579415441005828.")
-        }
-        var testDialogResult by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
+        var testCustomText by remember { mutableStateOf("Pembayaran QRIS Rp 15.123 berhasil diterima (Test)") }
+        var testDialogData by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
 
         if (showForm) {
             WebhookFormScreen(
@@ -471,7 +422,10 @@ class MainActivity : ComponentActivity() {
                 onSave = { saved ->
                     val mutable = webhooks.toMutableList()
                     if (editingIndex >= 0 && editingIndex < mutable.size) {
-                        mutable[editingIndex] = saved
+                        mutable[editingIndex] = saved.copy(
+                            successCount = webhooks[editingIndex].successCount,
+                            failCount = webhooks[editingIndex].failCount
+                        )
                     } else {
                         mutable.add(saved)
                     }
@@ -537,6 +491,11 @@ class MainActivity : ComponentActivity() {
                     },
                     onTest = { item ->
                         testTargetWebhook = item
+                    },
+                    onResetCounter = { idx ->
+                        val mutable = webhooks.toMutableList()
+                        mutable[idx] = mutable[idx].copy(successCount = 0, failCount = 0)
+                        saveWebhooksToPrefs(mutable)
                     }
                 )
             } else {
@@ -544,43 +503,31 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Dialog Input Teks/Nominal sebelum Test Kirim
+        // Dialog Input Simulasi Test Kirim
         testTargetWebhook?.let { target ->
-            val detectedNominal = NominalParser.extractAmount(customTestText)
             AlertDialog(
                 onDismissRequest = { testTargetWebhook = null },
-                title = { Text("Simulasi Test Kirim") },
+                title = { Text("Simulasi Test Kirim Webhook") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            "Masukkan teks notifikasi atau nominal sesuai tagihan Pending yang sedang aktif di PHPNuxBill (Siang/Sore hari):",
-                            fontSize = 12.sp
-                        )
+                        Text("Masukkan teks notifikasi simulasi untuk diuji ke endpoint:", fontSize = 12.sp)
                         OutlinedTextField(
-                            value = customTestText,
-                            onValueChange = { customTestText = it },
-                            label = { Text("Isi Notifikasi Simulasi") },
+                            value = testCustomText,
+                            onValueChange = { testCustomText = it },
+                            label = { Text("Teks Notifikasi / harga_transaksi") },
                             modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(
-                            text = if (detectedNominal != null)
-                                "Nominal Rp Terdeteksi: Rp $detectedNominal"
-                            else
-                                "Nominal Rp belum terdeteksi (Pastikan ada kata Rp...)",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (detectedNominal != null) Color(0xFF2E7D32) else Color(0xFFC62828)
                         )
                     }
                 },
                 confirmButton = {
                     Button(
                         onClick = {
-                            val itemToTest = target
+                            val item = target
                             testTargetWebhook = null
                             Toast.makeText(this, "Mengirim test...", Toast.LENGTH_SHORT).show()
-                            sendCustomTestWebhook(itemToTest, customTestText) { code, sent, resp ->
-                                testDialogResult = Triple(code, sent, resp)
+                            sendTestWebhook(item, testCustomText) { code, sent, resp ->
+                                testDialogData = Triple(code, sent, resp)
+                                refreshAllState()
                             }
                         }
                     ) {
@@ -595,22 +542,21 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // Dialog Hasil Test Kirim
-        testDialogResult?.let { (code, sentPayload, report) ->
+        testDialogData?.let { (code, sentPayload, serverResp) ->
             AlertDialog(
-                onDismissRequest = { testDialogResult = null },
-                title = { Text("Hasil Test ($code)") },
+                onDismissRequest = { testDialogData = null },
+                title = { Text("Response Server ($code)") },
                 text = {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         Text(
-                            text = "Payload Terakhir:\n$sentPayload\n\nRiwayat Percobaan:\n$report",
+                            text = "Payload Terkirim (harga_transaksi):\n$sentPayload\n\nResponse:\n${serverResp.ifEmpty { "(Kosong)" }}",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp
                         )
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { testDialogResult = null }) {
+                    TextButton(onClick = { testDialogData = null }) {
                         Text("Tutup")
                     }
                 }
@@ -622,7 +568,8 @@ class MainActivity : ComponentActivity() {
     fun WebhookListTab(
         modifier: Modifier = Modifier,
         onEdit: (WebhookItem, Int) -> Unit,
-        onTest: (WebhookItem) -> Unit
+        onTest: (WebhookItem) -> Unit,
+        onResetCounter: (Int) -> Unit
     ) {
         LazyColumn(
             modifier = modifier.fillMaxSize(),
@@ -688,36 +635,80 @@ class MainActivity : ComponentActivity() {
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "${item.selectedPackages.size} App • Smart Retry: ${if (item.smartRetry) "ON" else "OFF"}",
-                                fontSize = 12.sp,
-                                color = Color.DarkGray
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${item.selectedPackages.size} App Dipilih",
+                                    fontSize = 12.sp,
+                                    color = Color.DarkGray
+                                )
+                                // Counter Sukses & Gagal
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Surface(
+                                        color = Color(0xFF2E7D32).copy(alpha = 0.15f),
+                                        shape = CircleShape
+                                    ) {
+                                        Text(
+                                            text = " ✓ ${item.successCount} ",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF2E7D32),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    Surface(
+                                        color = Color(0xFFC62828).copy(alpha = 0.15f),
+                                        shape = CircleShape
+                                    ) {
+                                        Text(
+                                            text = " ✕ ${item.failCount} ",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFC62828),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
                             HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End,
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedButton(onClick = { onTest(item) }) {
-                                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Test Kirim")
+                                TextButton(onClick = { onResetCounter(idx) }) {
+                                    Text("Reset Counter", fontSize = 12.sp, color = Color.Gray)
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                OutlinedButton(onClick = { onEdit(item, idx) }) {
-                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Edit")
-                                }
-                                IconButton(
-                                    onClick = {
-                                        val mutable = webhooks.toMutableList()
-                                        mutable.removeAt(idx)
-                                        saveWebhooksToPrefs(mutable)
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    OutlinedButton(
+                                        onClick = { onTest(item) },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Test", fontSize = 12.sp)
                                     }
-                                ) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.Red)
+                                    OutlinedButton(
+                                        onClick = { onEdit(item, idx) },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Edit", fontSize = 12.sp)
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val mutable = webhooks.toMutableList()
+                                            mutable.removeAt(idx)
+                                            saveWebhooksToPrefs(mutable)
+                                        },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.Red, modifier = Modifier.size(18.dp))
+                                    }
                                 }
                             }
                         }
@@ -755,7 +746,7 @@ class MainActivity : ComponentActivity() {
                     title = "1. Buka Kunci Pengaturan Terbatas",
                     subtitle = "Info Aplikasi -> Titik Tiga (⋮) -> Izinkan pengaturan terbatas",
                     granted = notifListenerGranted,
-                    btnText = "Info Aplikasi",
+                    btnText = "Info",
                     onClick = { openAppInfoSettings() }
                 )
                 PermissionRow(
@@ -846,7 +837,7 @@ class MainActivity : ComponentActivity() {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(logs) { log ->
-                        val ok = log.statusCode in 200..299
+                        val isOk = log.status == "SUKSES"
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
@@ -854,7 +845,7 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 Surface(
                                     shape = CircleShape,
-                                    color = if (ok) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                    color = if (isOk) Color(0xFF2E7D32) else Color(0xFFC62828),
                                     modifier = Modifier.size(38.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -874,7 +865,7 @@ class MainActivity : ComponentActivity() {
                                         fontSize = 13.sp
                                     )
                                     Text("App: ${log.packageName}", fontSize = 11.sp, color = Color.Gray)
-                                    Text("kunciEntri: ${log.kunciEntri}", fontSize = 12.sp)
+                                    Text("kunciEntri/harga: ${log.kunciEntri}", fontSize = 12.sp)
                                     if (log.response.isNotEmpty()) {
                                         Text(
                                             "Resp: ${log.response}",
@@ -903,7 +894,6 @@ class MainActivity : ComponentActivity() {
         var aksi by remember { mutableStateOf(initial?.aksi ?: "updateStatus") }
         var statusBaru by remember { mutableStateOf(initial?.statusBaru ?: "Berhasil") }
         var includeTitle by remember { mutableStateOf(initial?.includeTitle ?: false) }
-        var smartRetry by remember { mutableStateOf(initial?.smartRetry ?: true) }
         var filterKeyword by remember { mutableStateOf(initial?.filterKeyword ?: "") }
         var selectedPackages by remember {
             mutableStateOf(initial?.selectedPackages?.toSet() ?: emptySet())
@@ -993,7 +983,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Text("Konfigurasi Body JSON ViaQRIS", fontWeight = FontWeight.Bold)
+                Text("Konfigurasi Body JSON ViaQRIS (Sesuai Asli)", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = aksi,
@@ -1016,22 +1006,7 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Smart Multi-Fallback & Auto-Extract Rp", fontWeight = FontWeight.Medium)
-                        Text(
-                            "Otomatis mengekstrak nominal Rp, mengirim harga_transaksi, & membuang ID transaksi panjang jika 404",
-                            fontSize = 12.sp,
-                            color = Color.Gray
-                        )
-                    }
-                    Switch(checked = smartRetry, onCheckedChange = { smartRetry = it })
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Sertakan Judul Notifikasi di 'kunciEntri'", fontWeight = FontWeight.Medium)
+                        Text("Sertakan Judul Notifikasi di 'harga_transaksi'", fontWeight = FontWeight.Medium)
                         Text(
                             "Jika mati: hanya mengirim isi teks notifikasi payment",
                             fontSize = 12.sp,
@@ -1077,10 +1052,11 @@ class MainActivity : ComponentActivity() {
                                 aksi = aksi.trim().ifEmpty { "updateStatus" },
                                 statusBaru = statusBaru.trim().ifEmpty { "Berhasil" },
                                 includeTitle = includeTitle,
-                                smartRetry = smartRetry,
                                 filterKeyword = filterKeyword.trim(),
                                 selectedPackages = selectedPackages.toList(),
-                                enabled = initial?.enabled ?: true
+                                enabled = initial?.enabled ?: true,
+                                successCount = initial?.successCount ?: 0,
+                                failCount = initial?.failCount ?: 0
                             )
                         )
                     },
