@@ -28,8 +28,8 @@
 
     <application
         android:label="ViaQRIS Webhook"
-        android:icon="@android:drawable/sym_def_app_icon"
-        android:roundIcon="@android:drawable/sym_def_app_icon"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
@@ -45,7 +45,7 @@
             </intent-filter>
         </activity>
 
-        <!-- stopWithTask="false" memastikan service TIDAK MATI saat aplikasi di-swipe dari Recent Apps -->
+        <!-- stopWithTask="false" memastikan service tidak mati saat aplikasi dihapus dari Recent Apps -->
         <service
             android:name=".WebhookNotificationListener"
             android:label="ViaQRIS Notification Forwarder"
