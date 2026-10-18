@@ -1,0 +1,41 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Background Biru ViaQRIS -->
+    <path
+        android:fillColor="#0F62FE"
+        android:pathData="M24,6 L84,6 C93.94,6 102,14.06 102,24 L102,84 C102,93.94 93.94,102 84,102 L24,102 C14.06,102 6,93.94 6,84 L6,24 C6,14.06 14.06,6 24,6 Z" />
+
+    <!-- Lingkaran Aksen Dalam -->
+    <path
+        android:fillColor="#0043CE"
+        android:pathData="M54,18 C73.88,18 90,34.12 90,54 C90,73.88 73.88,90 54,90 C34.12,90 18,73.88 18,54 C18,34.12 34.12,18 54,18 Z" />
+
+    <!-- Sudut Bingkai QR Kiri Atas -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,28 L44,28 L44,34 L34,34 L34,44 L28,44 Z" />
+
+    <!-- Sudut Bingkai QR Kanan Atas -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M64,28 L80,28 L80,44 L74,44 L74,34 L64,34 Z" />
+
+    <!-- Sudut Bingkai QR Kiri Bawah -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,64 L34,64 L34,74 L44,74 L44,80 L28,80 Z" />
+
+    <!-- Sudut Bingkai QR Kanan Bawah -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M74,64 L80,64 L80,80 L64,80 L64,74 L74,74 Z" />
+
+    <!-- Simbol Petir / Webhook Forward di Tengah -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M57,32 L41,56 L53,56 L49,76 L67,50 L55,50 Z" />
+</vector>
