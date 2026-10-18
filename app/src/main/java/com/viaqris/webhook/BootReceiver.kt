@@ -32,8 +32,6 @@ object NominalParser {
         """(?:Rp\.?|IDR)\s*([0-9]{1,3}(?:[.,][0-9]{3})+|[0-9]+)(?:,[0-9]{1,2})?""",
         RegexOption.IGNORE_CASE
     )
-    // Mengekstrak ID transaksi panjang (seperti 165579415441005828 di ShopeePay)
-    private val trxIdRegex = Regex("""\b([0-9]{8,25})\b""")
 
     fun extractAmount(text: String): Long? {
         val match = rpRegex.find(text)
@@ -44,10 +42,6 @@ object NominalParser {
         return null
     }
 
-    fun extractTransactionId(text: String): String? {
-        return trxIdRegex.find(text)?.groupValues?.get(1)
-    }
-
     fun buildSmartPayloads(
         aksi: String,
         statusBaru: String,
@@ -55,60 +49,53 @@ object NominalParser {
         smartRetry: Boolean
     ): List<Pair<String, JSONObject>> {
         val amount = extractAmount(rawText)
-        val trxId = extractTransactionId(rawText)
+        val trimmedNoDot = rawText.trim().trimEnd('.')
         val list = mutableListOf<Pair<String, JSONObject>>()
 
-        if (smartRetry && amount != null) {
-            // 1. Hanya harga_transaksi (Number) TANPA kunciEntri -> agar server langsung pakai harga_transaksi
-            list.add(
-                "harga_transaksi (Int)" to JSONObject().apply {
-                    put("aksi", aksi)
-                    put("harga_transaksi", amount)
-                    put("statusBaru", statusBaru)
-                }
-            )
+        // 1. Format Murni (100% Identik MacroDroid: hanya aksi, kunciEntri, statusBaru)
+        list.add(
+            "1. Standar MacroDroid" to JSONObject().apply {
+                put("aksi", aksi)
+                put("kunciEntri", rawText)
+                put("statusBaru", statusBaru)
+            }
+        )
 
-            // 2. Hanya harga_transaksi (String) TANPA kunciEntri
-            list.add(
-                "harga_transaksi (String)" to JSONObject().apply {
-                    put("aksi", aksi)
-                    put("harga_transaksi", amount.toString())
-                    put("statusBaru", statusBaru)
-                }
-            )
-
-            // 3. Jika ada ID transaksi panjang, kirim ID transaksi di kunciEntri + harga_transaksi
-            if (!trxId.isNullOrEmpty()) {
+        if (smartRetry) {
+            // 2. Tanpa titik di ujung kalimat (Mengatasi perbedaan titik di notifikasi ShopeePay asli)
+            if (trimmedNoDot != rawText) {
                 list.add(
-                    "ID Trx + harga_transaksi" to JSONObject().apply {
+                    "2. Tanpa Titik Akhir" to JSONObject().apply {
                         put("aksi", aksi)
-                        put("kunciEntri", trxId)
-                        put("harga_transaksi", amount)
+                        put("kunciEntri", trimmedNoDot)
                         put("statusBaru", statusBaru)
                     }
                 )
             }
 
-            // 4. kunciEntri berisi nominal + harga_transaksi
-            list.add(
-                "kunciEntri Nominal + harga_transaksi" to JSONObject().apply {
-                    put("aksi", aksi)
-                    put("kunciEntri", amount.toString())
-                    put("harga_transaksi", amount)
-                    put("statusBaru", statusBaru)
-                }
-            )
-        }
+            if (amount != null) {
+                val amountStr = amount.toString()
 
-        // 5. Fallback ke teks asli lengkap
-        list.add(
-            "Teks Lengkap" to JSONObject().apply {
-                put("aksi", aksi)
-                put("kunciEntri", rawText)
-                if (amount != null) put("harga_transaksi", amount)
-                put("statusBaru", statusBaru)
+                // 3. kunciEntri + harga_transaksi (String sesuai format updatedData server)
+                list.add(
+                    "3. kunciEntri + harga_transaksi" to JSONObject().apply {
+                        put("aksi", aksi)
+                        put("kunciEntri", trimmedNoDot)
+                        put("harga_transaksi", amountStr)
+                        put("statusBaru", statusBaru)
+                    }
+                )
+
+                // 4. Hanya harga_transaksi (String)
+                list.add(
+                    "4. Hanya harga_transaksi" to JSONObject().apply {
+                        put("aksi", aksi)
+                        put("harga_transaksi", amountStr)
+                        put("statusBaru", statusBaru)
+                    }
+                )
             }
-        )
+        }
 
         return list
     }
@@ -340,7 +327,7 @@ class WebhookNotificationListener : NotificationListenerService() {
             }
             if (index < candidates.size - 1) {
                 try {
-                    Thread.sleep(300)
+                    Thread.sleep(250)
                 } catch (_: Exception) {}
             }
         }
