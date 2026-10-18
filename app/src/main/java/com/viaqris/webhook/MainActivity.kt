@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
@@ -443,7 +444,7 @@ class MainActivity : ComponentActivity() {
 
         var testTargetWebhook by remember { mutableStateOf<WebhookItem?>(null) }
         var customTestText by remember {
-            mutableStateOf("Pembayaran sebesar Rp10.020 telah diterima pada transaksi 12628933938")
+            mutableStateOf("Pembayaran sebesar Rp2.004 telah diterima pada transaksi 12628933938")
         }
         var testDialogResult by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
 
@@ -471,7 +472,17 @@ class MainActivity : ComponentActivity() {
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
                 TopAppBar(
-                    title = { Text("ViaQRIS Webhook", fontWeight = FontWeight.Bold) },
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_launcher),
+                                contentDescription = "Logo ViaQRIS",
+                                modifier = Modifier.size(30.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text("ViaQRIS Webhook", fontWeight = FontWeight.Bold)
+                        }
+                    },
                     actions = {
                         if (allPermissionsReady) {
                             IconButton(
@@ -552,20 +563,20 @@ class MainActivity : ComponentActivity() {
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "Pastikan di PHPNuxBill / ViaQRIS sedang ada transaksi berstatus PENDING hari ini dengan nominal yang sama persis:",
+                            "Pastikan di PHPNuxBill / ViaQRIS sedang ada transaksi berstatus PENDING dengan nominal yang sama:",
                             fontSize = 12.sp
                         )
                         OutlinedTextField(
                             value = customTestText,
                             onValueChange = { customTestText = it },
-                            label = { Text("Isi kunciEntri (Notifikasi)") },
+                            label = { Text("Teks Notifikasi Simulasi") },
                             modifier = Modifier.fillMaxWidth()
                         )
                         Text(
                             text = if (detectedNominal != null)
-                                "Nominal Terbaca: $detectedNominal"
+                                "Nominal Terdeteksi (harga_transaksi): $detectedNominal"
                             else
-                                "Nominal Rp belum terbaca",
+                                "Nominal Rp belum terdeteksi",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (detectedNominal != null) Color(0xFF2E7D32) else Color(0xFFC62828)
@@ -601,7 +612,7 @@ class MainActivity : ComponentActivity() {
                 text = {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         Text(
-                            text = "Payload Terakhir:\n$sentPayload\n\nRiwayat Percobaan:\n$report",
+                            text = "Payload Terakhir:\n$sentPayload\n\nRiwayat Pengiriman:\n$report",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp
                         )
@@ -737,7 +748,7 @@ class MainActivity : ComponentActivity() {
 
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "${item.selectedPackages.size} Aplikasi Dipilih • Fallback: ${if (item.smartRetry) "Aktif" else "Mati"}",
+                                text = "${item.selectedPackages.size} Aplikasi Dipilih • Mode: ${if (item.smartRetry) "Nominal Otomatis" else "Teks Notifikasi"}",
                                 fontSize = 12.sp,
                                 color = Color.DarkGray
                             )
@@ -788,7 +799,7 @@ class MainActivity : ComponentActivity() {
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (allReady) "Semua Izin Aktif (Siap 24 Jam)" else "Pengaturan Izin & Restricted Permission",
+                        text = if (allReady) "Semua Izin Aktif" else "Pengaturan Izin & Restricted Permission",
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
                     )
@@ -821,7 +832,7 @@ class MainActivity : ComponentActivity() {
                     onClick = { requestPostNotifPermission() }
                 )
                 PermissionRow(
-                    title = "4. Bebas Optimasi Baterai (Jalan 24 Jam)",
+                    title = "4. Bebas Optimasi Baterai",
                     subtitle = if (batteryIgnored) "Sudah Bebas Baterai" else "Masih Dibatasi Sistem",
                     granted = batteryIgnored,
                     btnText = "Matikan",
@@ -1041,7 +1052,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Text("Konfigurasi Body JSON ViaQRIS", fontWeight = FontWeight.Bold)
+                Text("Konfigurasi Payload JSON", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = aksi,
@@ -1064,9 +1075,9 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Smart Fallback (Jika Percobaan 1 = 404)", fontWeight = FontWeight.Medium)
+                        Text("Ekstrak Nominal Otomatis (harga_transaksi)", fontWeight = FontWeight.Medium)
                         Text(
-                            "Percobaan 1 mengirim format murni MacroDroid. Jika 404, otomatis mencoba hapus titik akhir & kirim harga_transaksi",
+                            "Otomatis mengambil angka nominal Rp dari notifikasi. Jika gagal, otomatis mencoba mengirim teks notifikasi (kunciEntri).",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
@@ -1079,9 +1090,9 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Sertakan Judul Notifikasi di 'kunciEntri'", fontWeight = FontWeight.Medium)
+                        Text("Sertakan Judul Notifikasi", fontWeight = FontWeight.Medium)
                         Text(
-                            "Jika mati: hanya mengambil isi teks utama notifikasi",
+                            "Jika mati: hanya mengambil isi teks utama notifikasi pembayaran",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
