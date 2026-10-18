@@ -21,37 +21,10 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
-
-object NominalParser {
-    // Mengekstrak nominal uang tepat setelah kata "Rp" atau "IDR" (mengabaikan ID transaksi panjang)
-    private val rpRegex = Regex(
-        """(?:Rp\.?|IDR)\s*([0-9]{1,3}(?:[.,][0-9]{3})+|[0-9]+)(?:,[0-9]{1,2})?""",
-        RegexOption.IGNORE_CASE
-    )
-    private val longIdRegex = Regex("""\b\d{7,}\b""")
-
-    fun extractAmount(text: String): Long? {
-        val match = rpRegex.find(text)
-        if (match != null) {
-            val raw = match.groupValues[1].replace(".", "").replace(",", "")
-            return raw.toLongOrNull()
-        }
-        return null
-    }
-
-    fun cleanLongTransactionIds(text: String): String {
-        return longIdRegex.replace(text, "").replace(Regex("""\s+"""), " ").trim()
-    }
-
-    fun formatRupiahDots(amount: Long): String {
-        return NumberFormat.getNumberInstance(Locale("in", "ID")).format(amount)
-    }
-}
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -156,7 +129,7 @@ class WebhookNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null || sbn.isOngoing) return
         val notification = sbn.notification ?: return
-        if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
+        if ((notification.flags & Notification.FLAG_GROUP_SUMMARY) != 0) return
 
         val pkg = sbn.packageName ?: return
         if (pkg == packageName) return
@@ -212,140 +185,56 @@ class WebhookNotificationListener : NotificationListenerService() {
             }
 
             val includeTitle = webhook.optBoolean("includeTitle", false)
-            val rawKunciEntri = if (includeTitle && title.isNotEmpty()) {
+            val hargaTransaksi = if (includeTitle && title.isNotEmpty()) {
                 "$title - $bodyText"
             } else {
                 bodyText
             }
 
+            val webhookId = webhook.optString("id", "")
             val webhookName = webhook.optString("name", "Webhook")
             val url = webhook.optString("url", "").trim()
             val apiToken = webhook.optString("apiToken", "").trim()
             val aksi = webhook.optString("aksi", "updateStatus").ifEmpty { "updateStatus" }
             val statusBaru = webhook.optString("statusBaru", "Berhasil").ifEmpty { "Berhasil" }
-            val smartRetry = webhook.optBoolean("smartRetry", true)
 
             if (url.isEmpty()) continue
 
             executor.execute {
-                sendSmartWebhook(
+                sendWebhookPost(
+                    webhookId = webhookId,
                     webhookName = webhookName,
                     targetUrl = url,
                     apiToken = apiToken,
                     aksi = aksi,
-                    rawKunciEntri = rawKunciEntri,
+                    hargaTransaksi = hargaTransaksi,
                     statusBaru = statusBaru,
-                    packageName = pkg,
-                    smartRetry = smartRetry
+                    packageName = pkg
                 )
             }
         }
     }
 
-    private fun sendSmartWebhook(
+    private fun sendWebhookPost(
+        webhookId: String,
         webhookName: String,
         targetUrl: String,
         apiToken: String,
         aksi: String,
-        rawKunciEntri: String,
+        hargaTransaksi: String,
         statusBaru: String,
-        packageName: String,
-        smartRetry: Boolean
+        packageName: String
     ) {
-        val extractedAmount = NominalParser.extractAmount(rawKunciEntri)
-        val cleanedText = NominalParser.cleanLongTransactionIds(rawKunciEntri)
-
-        // Daftar kandidat payload yang akan dicoba secara berurutan jika mendapat 404
-        val candidates = mutableListOf<Pair<String, JSONObject>>()
-
-        // 1. Teks asli + harga_transaksi (jika nominal ditemukan)
-        candidates.add(
-            "Asli" to JSONObject().apply {
-                put("aksi", aksi)
-                put("kunciEntri", rawKunciEntri)
-                put("statusBaru", statusBaru)
-                if (extractedAmount != null) {
-                    put("harga_transaksi", extractedAmount)
-                }
-            }
-        )
-
-        if (smartRetry && extractedAmount != null) {
-            // 2. Teks yang sudah dibersihkan dari ID transaksi 18 digit (khusus ShopeePay, dll.)
-            if (cleanedText != rawKunciEntri) {
-                candidates.add(
-                    "TanpaID" to JSONObject().apply {
-                        put("aksi", aksi)
-                        put("kunciEntri", cleanedText)
-                        put("statusBaru", statusBaru)
-                        put("harga_transaksi", extractedAmount)
-                    }
-                )
-            }
-
-            // 3. Format Rp dengan titik (contoh: "Rp 2.014")
-            val formattedDots = NominalParser.formatRupiahDots(extractedAmount)
-            candidates.add(
-                "RpTitik" to JSONObject().apply {
-                    put("aksi", aksi)
-                    put("kunciEntri", "Rp $formattedDots")
-                    put("statusBaru", statusBaru)
-                    put("harga_transaksi", extractedAmount)
-                }
-            )
-
-            // 4. Angka nominal murni (contoh: "2014")
-            candidates.add(
-                "NominalMurni" to JSONObject().apply {
-                    put("aksi", aksi)
-                    put("kunciEntri", extractedAmount.toString())
-                    put("statusBaru", statusBaru)
-                    put("harga_transaksi", extractedAmount)
-                }
-            )
-        }
-
-        var finalCode = 0
-        var finalResp = ""
-        var usedMode = "Asli"
-        var finalKunci = rawKunciEntri
-
-        for ((index, pair) in candidates.withIndex()) {
-            val (modeName, jsonPayload) = pair
-            val (code, resp) = executePost(targetUrl, apiToken, jsonPayload)
-            finalCode = code
-            finalResp = resp
-            usedMode = modeName
-            finalKunci = jsonPayload.optString("kunciEntri", rawKunciEntri)
-
-            // Jika sukses (200-299) atau error selain 404, hentikan percobaan ulang
-            if (code in 200..299 || code != 404) {
-                break
-            }
-            if (index < candidates.size - 1) {
-                try {
-                    Thread.sleep(350)
-                } catch (_: Exception) {}
-            }
-        }
-
-        val amountInfo = if (extractedAmount != null) " [Rp $extractedAmount | Mode: $usedMode]" else ""
-        saveLog(
-            webhookName = webhookName,
-            packageName = packageName,
-            kunciEntri = "$finalKunci$amountInfo",
-            statusCode = finalCode,
-            response = finalResp
-        )
-    }
-
-    private fun executePost(
-        targetUrl: String,
-        apiToken: String,
-        payloadJson: JSONObject
-    ): Pair<Int, String> {
         var statusCode = 0
         var responseText = ""
+
+        // Sesuai struktur aplikasi asli: menggunakan key "harga_transaksi"
+        val payloadJson = JSONObject().apply {
+            put("aksi", aksi)
+            put("harga_transaksi", hargaTransaksi)
+            put("statusBaru", statusBaru)
+        }
+
         try {
             val url = URL(targetUrl)
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -370,7 +259,7 @@ class WebhookNotificationListener : NotificationListenerService() {
             val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
             if (stream != null) {
                 BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
-                    responseText = reader.readText().take(350)
+                    responseText = reader.readText().take(300)
                 }
             }
             conn.disconnect()
@@ -378,15 +267,57 @@ class WebhookNotificationListener : NotificationListenerService() {
             statusCode = -1
             responseText = e.message ?: "Network Error"
         }
-        return statusCode to responseText
+
+        val lowerResp = responseText.lowercase()
+        val isSuccess = (statusCode in 200..299) || lowerResp.contains("berhasil") || lowerResp.contains("sukses") || lowerResp.contains("success")
+
+        updateWebhookCounter(webhookId, isSuccess)
+        saveLog(
+            webhookName = webhookName,
+            packageName = packageName,
+            hargaTransaksi = hargaTransaksi,
+            statusCode = statusCode,
+            response = responseText,
+            isSuccess = isSuccess
+        )
+    }
+
+    private fun updateWebhookCounter(webhookId: String, isSuccess: Boolean) {
+        if (webhookId.isEmpty()) return
+        try {
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            synchronized(this) {
+                val webhooksJsonStr = prefs.getString("webhooks_json", "[]") ?: "[]"
+                val webhooksArray = JSONArray(webhooksJsonStr)
+                val updatedArray = JSONArray()
+
+                for (i in 0 until webhooksArray.length()) {
+                    val obj = webhooksArray.optJSONObject(i) ?: continue
+                    if (obj.optString("id") == webhookId) {
+                        val successCount = obj.optInt("successCount", 0)
+                        val failCount = obj.optInt("failCount", 0)
+                        if (isSuccess) {
+                            obj.put("successCount", successCount + 1)
+                        } else {
+                            obj.put("failCount", failCount + 1)
+                        }
+                    }
+                    updatedArray.put(obj)
+                }
+                prefs.edit().putString("webhooks_json", updatedArray.toString()).apply()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun saveLog(
         webhookName: String,
         packageName: String,
-        kunciEntri: String,
+        hargaTransaksi: String,
         statusCode: Int,
-        response: String
+        response: String,
+        isSuccess: Boolean
     ) {
         try {
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -399,12 +330,14 @@ class WebhookNotificationListener : NotificationListenerService() {
                 }
 
                 val timeStr = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault()).format(Date())
+                val statusStr = if (isSuccess) "SUKSES" else "GAGAL"
                 val newEntry = JSONObject().apply {
                     put("time", timeStr)
                     put("webhookName", webhookName)
                     put("packageName", packageName)
-                    put("kunciEntri", kunciEntri)
+                    put("kunciEntri", hargaTransaksi)
                     put("statusCode", statusCode)
+                    put("status", statusStr)
                     put("response", response)
                 }
 
