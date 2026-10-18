@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -70,7 +71,9 @@ data class WebhookItem(
     val smartRetry: Boolean = true,
     val filterKeyword: String = "",
     val selectedPackages: List<String> = emptyList(),
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val successCount: Int = 0,
+    val failCount: Int = 0
 )
 
 data class InstalledAppItem(
@@ -248,7 +251,9 @@ class MainActivity : ComponentActivity() {
                         smartRetry = obj.optBoolean("smartRetry", true),
                         filterKeyword = obj.optString("filterKeyword", ""),
                         selectedPackages = pkgs,
-                        enabled = obj.optBoolean("enabled", true)
+                        enabled = obj.optBoolean("enabled", true),
+                        successCount = obj.optInt("successCount", 0),
+                        failCount = obj.optInt("failCount", 0)
                     )
                 )
             }
@@ -271,6 +276,8 @@ class MainActivity : ComponentActivity() {
                 put("smartRetry", item.smartRetry)
                 put("filterKeyword", item.filterKeyword)
                 put("enabled", item.enabled)
+                put("successCount", item.successCount)
+                put("failCount", item.failCount)
                 val pkgArr = JSONArray()
                 item.selectedPackages.forEach { pkgArr.put(it) }
                 put("selectedPackages", pkgArr)
@@ -357,48 +364,12 @@ class MainActivity : ComponentActivity() {
         onFinish: (Int, String, String) -> Unit
     ) {
         executor.execute {
-            val extractedAmount = NominalParser.extractAmount(customNotificationText)
-            val cleanedText = NominalParser.cleanLongTransactionIds(customNotificationText)
-
-            val candidates = mutableListOf<Pair<String, JSONObject>>()
-            candidates.add(
-                "1. Teks Asli + harga_transaksi" to JSONObject().apply {
-                    put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                    put("kunciEntri", customNotificationText)
-                    put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                    if (extractedAmount != null) put("harga_transaksi", extractedAmount)
-                }
+            val candidates = NominalParser.buildSmartPayloads(
+                aksi = item.aksi.ifEmpty { "updateStatus" },
+                statusBaru = item.statusBaru.ifEmpty { "Berhasil" },
+                rawText = customNotificationText,
+                smartRetry = item.smartRetry
             )
-
-            if (item.smartRetry && extractedAmount != null) {
-                if (cleanedText != customNotificationText) {
-                    candidates.add(
-                        "2. Teks Bersih (Tanpa ID Transaksi)" to JSONObject().apply {
-                            put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                            put("kunciEntri", cleanedText)
-                            put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                            put("harga_transaksi", extractedAmount)
-                        }
-                    )
-                }
-                val dots = NominalParser.formatRupiahDots(extractedAmount)
-                candidates.add(
-                    "3. Format Rp Titik" to JSONObject().apply {
-                        put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                        put("kunciEntri", "Rp $dots")
-                        put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                        put("harga_transaksi", extractedAmount)
-                    }
-                )
-                candidates.add(
-                    "4. Nominal Angka Murni" to JSONObject().apply {
-                        put("aksi", item.aksi.ifEmpty { "updateStatus" })
-                        put("kunciEntri", extractedAmount.toString())
-                        put("statusBaru", item.statusBaru.ifEmpty { "Berhasil" })
-                        put("harga_transaksi", extractedAmount)
-                    }
-                )
-            }
 
             val logReport = StringBuilder()
             var lastCode = 0
@@ -440,6 +411,7 @@ class MainActivity : ComponentActivity() {
                 lastCode = code
                 lastPayload = payload.toString(2)
                 logReport.append("[$modeTitle] -> HTTP $code\n")
+                logReport.append("Body: ${payload}\n")
                 logReport.append("Resp: ${resp.ifEmpty { "(Kosong)" }}\n\n")
 
                 if (code in 200..299 || code != 404) {
@@ -447,7 +419,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            mainHandler.post { onFinish(lastCode, lastPayload, logReport.toString().trim()) }
+            // Update counter pada webhook terkait
+            val isSuccess = lastCode in 200..299
+            mainHandler.post {
+                val updated = webhooks.map { w ->
+                    if (w.id == item.id) {
+                        if (isSuccess) w.copy(successCount = w.successCount + 1)
+                        else w.copy(failCount = w.failCount + 1)
+                    } else w
+                }
+                saveWebhooksToPrefs(updated)
+                onFinish(lastCode, lastPayload, logReport.toString().trim())
+            }
         }
     }
 
@@ -457,12 +440,15 @@ class MainActivity : ComponentActivity() {
         var editingWebhook by remember { mutableStateOf<WebhookItem?>(null) }
         var editingIndex by remember { mutableIntStateOf(-1) }
         var showForm by remember { mutableStateOf(false) }
+        var forceShowPermissions by remember { mutableStateOf(false) }
 
         var testTargetWebhook by remember { mutableStateOf<WebhookItem?>(null) }
         var customTestText by remember {
             mutableStateOf("Pembayaran sebesar Rp2.014 telah diterima pada transaksi 165579415441005828.")
         }
         var testDialogResult by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
+
+        val allPermissionsReady = notifListenerGranted && postNotifGranted && batteryIgnored
 
         if (showForm) {
             WebhookFormScreen(
@@ -486,8 +472,20 @@ class MainActivity : ComponentActivity() {
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
                 TopAppBar(
-                    title = { Text("ViaQRIS Webhook Forwarder", fontWeight = FontWeight.Bold) },
+                    title = { Text("ViaQRIS Webhook", fontWeight = FontWeight.Bold) },
                     actions = {
+                        // Jika semua izin sudah aktif, kartu perizinan disembunyikan dan diganti ikon kecil di atas ini
+                        if (allPermissionsReady) {
+                            IconButton(
+                                onClick = { forceShowPermissions = !forceShowPermissions }
+                            ) {
+                                Icon(
+                                    Icons.Default.VerifiedUser,
+                                    contentDescription = "Status Izin Aktif",
+                                    tint = Color(0xFF2E7D32)
+                                )
+                            }
+                        }
                         IconButton(onClick = { refreshAllState() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                         }
@@ -511,9 +509,12 @@ class MainActivity : ComponentActivity() {
                 NavigationBar {
                     NavigationBarItem(
                         selected = currentTab == 0,
-                        onClick = { currentTab = 0 },
+                        onClick = {
+                            refreshAllState()
+                            currentTab = 0
+                        },
                         icon = { Icon(Icons.Default.Webhook, contentDescription = null) },
-                        label = { Text("Webhook & Izin") }
+                        label = { Text("Dashboard") }
                     )
                     NavigationBarItem(
                         selected = currentTab == 1,
@@ -530,6 +531,7 @@ class MainActivity : ComponentActivity() {
             if (currentTab == 0) {
                 WebhookListTab(
                     modifier = Modifier.padding(innerPadding),
+                    showPermissionCard = !allPermissionsReady || forceShowPermissions,
                     onEdit = { item, idx ->
                         editingWebhook = item
                         editingIndex = idx
@@ -544,16 +546,16 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Dialog Input Teks/Nominal sebelum Test Kirim
         testTargetWebhook?.let { target ->
             val detectedNominal = NominalParser.extractAmount(customTestText)
+            val detectedTrxId = NominalParser.extractTransactionId(customTestText)
             AlertDialog(
                 onDismissRequest = { testTargetWebhook = null },
                 title = { Text("Simulasi Test Kirim") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "Masukkan teks notifikasi atau nominal sesuai tagihan Pending yang sedang aktif di PHPNuxBill (Siang/Sore hari):",
+                            "Masukkan teks notifikasi atau nominal sesuai tagihan Pending yang sedang aktif di PHPNuxBill:",
                             fontSize = 12.sp
                         )
                         OutlinedTextField(
@@ -564,7 +566,7 @@ class MainActivity : ComponentActivity() {
                         )
                         Text(
                             text = if (detectedNominal != null)
-                                "Nominal Rp Terdeteksi: Rp $detectedNominal"
+                                "harga_transaksi: $detectedNominal" + (if (detectedTrxId != null) "\nID Trx: $detectedTrxId" else "")
                             else
                                 "Nominal Rp belum terdeteksi (Pastikan ada kata Rp...)",
                             fontSize = 12.sp,
@@ -595,7 +597,6 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // Dialog Hasil Test Kirim
         testDialogResult?.let { (code, sentPayload, report) ->
             AlertDialog(
                 onDismissRequest = { testDialogResult = null },
@@ -621,6 +622,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun WebhookListTab(
         modifier: Modifier = Modifier,
+        showPermissionCard: Boolean,
         onEdit: (WebhookItem, Int) -> Unit,
         onTest: (WebhookItem) -> Unit
     ) {
@@ -629,7 +631,9 @@ class MainActivity : ComponentActivity() {
             contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { PermissionCard() }
+            if (showPermissionCard) {
+                item { PermissionCard() }
+            }
 
             item {
                 Text(
@@ -687,9 +691,56 @@ class MainActivity : ComponentActivity() {
                                 fontSize = 13.sp,
                                 color = MaterialTheme.colorScheme.primary
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Baris Counter Sukses & Gagal
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFFE8F5E9)
+                                ) {
+                                    Text(
+                                        text = "✓ Sukses: ${item.successCount}",
+                                        color = Color(0xFF2E7D32),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFFFFEBEE)
+                                ) {
+                                    Text(
+                                        text = "✗ Gagal: ${item.failCount}",
+                                        color = Color(0xFFC62828),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                                if (item.successCount > 0 || item.failCount > 0) {
+                                    TextButton(
+                                        onClick = {
+                                            val mutable = webhooks.toMutableList()
+                                            mutable[idx] = item.copy(successCount = 0, failCount = 0)
+                                            saveWebhooksToPrefs(mutable)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                                        modifier = Modifier.height(28.dp)
+                                    ) {
+                                        Text("Reset", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "${item.selectedPackages.size} App • Smart Retry: ${if (item.smartRetry) "ON" else "OFF"}",
+                                text = "${item.selectedPackages.size} Aplikasi Dipilih • Mode: ${if (item.smartRetry) "Auto harga_transaksi" else "Standar"}",
                                 fontSize = 12.sp,
                                 color = Color.DarkGray
                             )
@@ -874,7 +925,7 @@ class MainActivity : ComponentActivity() {
                                         fontSize = 13.sp
                                     )
                                     Text("App: ${log.packageName}", fontSize = 11.sp, color = Color.Gray)
-                                    Text("kunciEntri: ${log.kunciEntri}", fontSize = 12.sp)
+                                    Text("Data: ${log.kunciEntri}", fontSize = 12.sp)
                                     if (log.response.isNotEmpty()) {
                                         Text(
                                             "Resp: ${log.response}",
@@ -1016,9 +1067,9 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Smart Multi-Fallback & Auto-Extract Rp", fontWeight = FontWeight.Medium)
+                        Text("Utamakan Opsi 'harga_transaksi' & Smart Fallback", fontWeight = FontWeight.Medium)
                         Text(
-                            "Otomatis mengekstrak nominal Rp, mengirim harga_transaksi, & membuang ID transaksi panjang jika 404",
+                            "Mengekstrak harga Rp dari notifikasi lalu mengirimkannya via harga_transaksi serta ID transaksi otomatis",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
@@ -1033,7 +1084,7 @@ class MainActivity : ComponentActivity() {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Sertakan Judul Notifikasi di 'kunciEntri'", fontWeight = FontWeight.Medium)
                         Text(
-                            "Jika mati: hanya mengirim isi teks notifikasi payment",
+                            "Jika mati: hanya mengambil isi teks utama notifikasi",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
@@ -1080,7 +1131,9 @@ class MainActivity : ComponentActivity() {
                                 smartRetry = smartRetry,
                                 filterKeyword = filterKeyword.trim(),
                                 selectedPackages = selectedPackages.toList(),
-                                enabled = initial?.enabled ?: true
+                                enabled = initial?.enabled ?: true,
+                                successCount = initial?.successCount ?: 0,
+                                failCount = initial?.failCount ?: 0
                             )
                         )
                     },
@@ -1152,7 +1205,7 @@ class MainActivity : ComponentActivity() {
                     value = search,
                     onValueChange = { search = it },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    placeholder = { Text("Cari GoPay, DANA, OrderKuota, BCA, BRI...") },
+                    placeholder = { Text("Cari GoPay, DANA, OrderKuota, ShopeePay, BCA...") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 6.dp),
