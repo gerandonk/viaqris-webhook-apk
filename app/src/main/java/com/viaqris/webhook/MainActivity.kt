@@ -399,7 +399,7 @@ class MainActivity : ComponentActivity() {
                     val stream = if (code in 200..299) conn.inputStream else conn.errorStream
                     if (stream != null) {
                         BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use {
-                            resp = it.readText().take(300)
+                            resp = it.readText().take(350)
                         }
                     }
                     conn.disconnect()
@@ -411,7 +411,7 @@ class MainActivity : ComponentActivity() {
                 lastCode = code
                 lastPayload = payload.toString(2)
                 logReport.append("[$modeTitle] -> HTTP $code\n")
-                logReport.append("Body: ${payload}\n")
+                logReport.append("Body: $payload\n")
                 logReport.append("Resp: ${resp.ifEmpty { "(Kosong)" }}\n\n")
 
                 if (code in 200..299 || code != 404) {
@@ -419,7 +419,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Update counter pada webhook terkait
             val isSuccess = lastCode in 200..299
             mainHandler.post {
                 val updated = webhooks.map { w ->
@@ -444,7 +443,7 @@ class MainActivity : ComponentActivity() {
 
         var testTargetWebhook by remember { mutableStateOf<WebhookItem?>(null) }
         var customTestText by remember {
-            mutableStateOf("Pembayaran sebesar Rp2.014 telah diterima pada transaksi 165579415441005828.")
+            mutableStateOf("Pembayaran sebesar Rp10.020 telah diterima pada transaksi 12628933938")
         }
         var testDialogResult by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
 
@@ -474,7 +473,6 @@ class MainActivity : ComponentActivity() {
                 TopAppBar(
                     title = { Text("ViaQRIS Webhook", fontWeight = FontWeight.Bold) },
                     actions = {
-                        // Jika semua izin sudah aktif, kartu perizinan disembunyikan dan diganti ikon kecil di atas ini
                         if (allPermissionsReady) {
                             IconButton(
                                 onClick = { forceShowPermissions = !forceShowPermissions }
@@ -548,27 +546,26 @@ class MainActivity : ComponentActivity() {
 
         testTargetWebhook?.let { target ->
             val detectedNominal = NominalParser.extractAmount(customTestText)
-            val detectedTrxId = NominalParser.extractTransactionId(customTestText)
             AlertDialog(
                 onDismissRequest = { testTargetWebhook = null },
                 title = { Text("Simulasi Test Kirim") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "Masukkan teks notifikasi atau nominal sesuai tagihan Pending yang sedang aktif di PHPNuxBill:",
+                            "Pastikan di PHPNuxBill / ViaQRIS sedang ada transaksi berstatus PENDING hari ini dengan nominal yang sama persis:",
                             fontSize = 12.sp
                         )
                         OutlinedTextField(
                             value = customTestText,
                             onValueChange = { customTestText = it },
-                            label = { Text("Isi Notifikasi Simulasi") },
+                            label = { Text("Isi kunciEntri (Notifikasi)") },
                             modifier = Modifier.fillMaxWidth()
                         )
                         Text(
                             text = if (detectedNominal != null)
-                                "harga_transaksi: $detectedNominal" + (if (detectedTrxId != null) "\nID Trx: $detectedTrxId" else "")
+                                "Nominal Terbaca: $detectedNominal"
                             else
-                                "Nominal Rp belum terdeteksi (Pastikan ada kata Rp...)",
+                                "Nominal Rp belum terbaca",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (detectedNominal != null) Color(0xFF2E7D32) else Color(0xFFC62828)
@@ -740,7 +737,7 @@ class MainActivity : ComponentActivity() {
 
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "${item.selectedPackages.size} Aplikasi Dipilih • Mode: ${if (item.smartRetry) "Auto harga_transaksi" else "Standar"}",
+                                text = "${item.selectedPackages.size} Aplikasi Dipilih • Fallback: ${if (item.smartRetry) "Aktif" else "Mati"}",
                                 fontSize = 12.sp,
                                 color = Color.DarkGray
                             )
@@ -1067,9 +1064,9 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Utamakan Opsi 'harga_transaksi' & Smart Fallback", fontWeight = FontWeight.Medium)
+                        Text("Smart Fallback (Jika Percobaan 1 = 404)", fontWeight = FontWeight.Medium)
                         Text(
-                            "Mengekstrak harga Rp dari notifikasi lalu mengirimkannya via harga_transaksi serta ID transaksi otomatis",
+                            "Percobaan 1 mengirim format murni MacroDroid. Jika 404, otomatis mencoba hapus titik akhir & kirim harga_transaksi",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
