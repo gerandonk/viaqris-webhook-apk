@@ -61,6 +61,18 @@
                 android:value="Memantau notifikasi transaksi pembayaran QRIS secara real-time untuk diteruskan ke server webhook merchant." />
         </service>
 
+        <!-- Foreground service pengirim heartbeat berkala ke server viaQris -->
+        <service
+            android:name=".HeartbeatService"
+            android:label="ViaQRIS Heartbeat"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Mengirim sinyal heartbeat berkala agar status perangkat tetap terpantau di server viaQris." />
+        </service>
+
         <!-- Receiver agar otomatis aktif kembali saat HP di-restart -->
         <receiver
             android:name=".BootReceiver"
