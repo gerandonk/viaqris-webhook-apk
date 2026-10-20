@@ -106,7 +106,7 @@ class MainActivity : ComponentActivity() {
     private var batteryIgnored by mutableStateOf(false)
     private var webhooks by mutableStateOf(listOf<WebhookItem>())
     private var logs by mutableStateOf(listOf<LogItem>())
-    private var heartbeat by mutableStateOf(HeartbeatConfig())
+    private var heartbeats by mutableStateOf(listOf<HeartbeatConfig>())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -147,7 +147,7 @@ class MainActivity : ComponentActivity() {
         }
         loadWebhooksFromPrefs()
         loadLogsFromPrefs()
-        heartbeat = HeartbeatStore.load(this)
+        heartbeats = HeartbeatStore.loadAll(this)
     }
 
     private fun rebindListenerService() {
@@ -447,6 +447,7 @@ class MainActivity : ComponentActivity() {
         var showForm by remember { mutableStateOf(false) }
         var showAddChooser by remember { mutableStateOf(false) }
         var showHeartbeatForm by remember { mutableStateOf(false) }
+        var editingHeartbeat by remember { mutableStateOf<HeartbeatConfig?>(null) }
         var forceShowPermissions by remember { mutableStateOf(false) }
 
         var testTargetWebhook by remember { mutableStateOf<WebhookItem?>(null) }
@@ -477,9 +478,10 @@ class MainActivity : ComponentActivity() {
 
         if (showHeartbeatForm) {
             HeartbeatFormScreen(
+                initial = editingHeartbeat,
                 onCancel = { showHeartbeatForm = false },
                 onSaved = {
-                    heartbeat = HeartbeatStore.load(this)
+                    heartbeats = HeartbeatStore.loadAll(this)
                     showHeartbeatForm = false
                 }
             )
@@ -567,7 +569,10 @@ class MainActivity : ComponentActivity() {
                     onTest = { item ->
                         testTargetWebhook = item
                     },
-                    onEditHeartbeat = { showHeartbeatForm = true }
+                    onEditHeartbeat = { cfg ->
+                        editingHeartbeat = cfg
+                        showHeartbeatForm = true
+                    }
                 )
             } else {
                 LogsTab(modifier = Modifier.padding(innerPadding))
@@ -594,9 +599,11 @@ class MainActivity : ComponentActivity() {
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Webhook Penerusan Transaksi")
                         }
+                        val heartbeatConfigured = heartbeats.isNotEmpty()
                         OutlinedButton(
                             onClick = {
                                 showAddChooser = false
+                                editingHeartbeat = null
                                 showHeartbeatForm = true
                             },
                             modifier = Modifier.fillMaxWidth()
@@ -604,6 +611,13 @@ class MainActivity : ComponentActivity() {
                             Icon(Icons.Default.Favorite, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Heartbeat Monitoring")
+                        }
+                        if (heartbeatConfigured) {
+                            Text(
+                                "Sudah ada ${heartbeats.size} heartbeat terdaftar. Tambahkan lagi bila perlu, atau kelola dari daftar di Dashboard.",
+                                fontSize = 11.sp,
+                                color = Color.Gray
+                            )
                         }
                     }
                 },
@@ -692,7 +706,7 @@ class MainActivity : ComponentActivity() {
         showPermissionCard: Boolean,
         onEdit: (WebhookItem, Int) -> Unit,
         onTest: (WebhookItem) -> Unit,
-        onEditHeartbeat: () -> Unit
+        onEditHeartbeat: (HeartbeatConfig) -> Unit
     ) {
         LazyColumn(
             modifier = modifier.fillMaxSize(),
@@ -703,8 +717,31 @@ class MainActivity : ComponentActivity() {
                 item { PermissionCard() }
             }
 
-            if (heartbeat.enabled || heartbeat.url.isNotBlank() || heartbeat.token.isNotBlank()) {
-                item { HeartbeatCard(onEdit = onEditHeartbeat) }
+            if (heartbeats.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Heartbeat Monitoring (${heartbeats.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                itemsIndexed(heartbeats) { idx, cfg ->
+                    HeartbeatCard(
+                        config = cfg,
+                        onEdit = { onEditHeartbeat(cfg) },
+                        onToggle = { checked ->
+                            val updated = cfg.copy(enabled = checked)
+                            HeartbeatStore.upsert(this@MainActivity, updated)
+                            heartbeats = HeartbeatStore.loadAll(this@MainActivity)
+                            HeartbeatService.sync(this@MainActivity)
+                        },
+                        onDelete = {
+                            HeartbeatStore.remove(this@MainActivity, cfg.id)
+                            heartbeats = HeartbeatStore.loadAll(this@MainActivity)
+                            HeartbeatService.sync(this@MainActivity)
+                        }
+                    )
+                }
             }
 
             item {
@@ -851,41 +888,42 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun HeartbeatCard(onEdit: () -> Unit) {
-        val ok = heartbeat.lastCode in 200..299
+    fun HeartbeatCard(
+        config: HeartbeatConfig,
+        onEdit: () -> Unit,
+        onToggle: (Boolean) -> Unit,
+        onDelete: () -> Unit
+    ) {
+        val ok = config.lastCode in 200..299
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Default.Favorite,
                         contentDescription = null,
-                        tint = if (heartbeat.enabled) Color(0xFF2E7D32) else Color.Gray
+                        tint = if (config.enabled) Color(0xFF2E7D32) else Color.Gray
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Heartbeat Monitoring", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         Text(
-                            text = if (heartbeat.enabled)
-                                "Aktif • tiap ${heartbeat.intervalSeconds.coerceAtLeast(30)}s"
+                            text = config.name.ifBlank { "Heartbeat Monitoring" },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        Text(
+                            text = if (config.enabled)
+                                "Aktif • tiap ${config.intervalSeconds.coerceAtLeast(30)}s"
                             else "Nonaktif",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
                     }
-                    Switch(
-                        checked = heartbeat.enabled,
-                        onCheckedChange = { checked ->
-                            val cfg = heartbeat.copy(enabled = checked)
-                            HeartbeatStore.save(this@MainActivity, cfg)
-                            heartbeat = cfg
-                            HeartbeatService.sync(this@MainActivity)
-                        }
-                    )
+                    Switch(checked = config.enabled, onCheckedChange = onToggle)
                 }
-                if (heartbeat.url.isNotBlank()) {
+                if (config.url.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = heartbeat.url,
+                        text = config.url,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -898,7 +936,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFE8F5E9)) {
                         Text(
-                            text = "✓ Terkirim: ${heartbeat.totalSent}",
+                            text = "✓ Terkirim: ${config.totalSent}",
                             color = Color(0xFF2E7D32),
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp,
@@ -907,7 +945,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFFFEBEE)) {
                         Text(
-                            text = "✗ Gagal: ${heartbeat.totalFailed}",
+                            text = "✗ Gagal: ${config.totalFailed}",
                             color = Color(0xFFC62828),
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp,
@@ -915,13 +953,13 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
-                if (heartbeat.lastSentAt > 0) {
+                if (config.lastSentAt > 0) {
                     Spacer(modifier = Modifier.height(6.dp))
                     val time = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault())
-                        .format(Date(heartbeat.lastSentAt))
+                        .format(Date(config.lastSentAt))
                     Text(
-                        text = "Terakhir: $time (HTTP ${heartbeat.lastCode})" +
-                            if (heartbeat.lastResponse.isNotEmpty()) " • ${heartbeat.lastResponse}" else "",
+                        text = "Terakhir: $time (HTTP ${config.lastCode})" +
+                            if (config.lastResponse.isNotEmpty()) " • ${config.lastResponse}" else "",
                         fontSize = 12.sp,
                         color = if (ok) Color(0xFF2E7D32) else Color(0xFFC62828)
                     )
@@ -935,7 +973,10 @@ class MainActivity : ComponentActivity() {
                     OutlinedButton(onClick = onEdit) {
                         Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Kelola")
+                        Text("Edit")
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.Red)
                     }
                 }
             }
@@ -944,34 +985,28 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun HeartbeatFormScreen(
+        initial: HeartbeatConfig?,
         onCancel: () -> Unit,
         onSaved: () -> Unit
     ) {
-        var enabled by remember { mutableStateOf(heartbeat.enabled) }
-        var url by remember { mutableStateOf(heartbeat.url) }
-        var token by remember { mutableStateOf(heartbeat.token) }
-        var secret by remember { mutableStateOf(heartbeat.secret) }
-        var deviceId by remember { mutableStateOf(heartbeat.deviceId) }
-        var interval by remember { mutableStateOf(heartbeat.intervalSeconds.toString()) }
-        var showAdvanced by remember { mutableStateOf(false) }
+        var name by remember { mutableStateOf(initial?.name ?: "Heartbeat Monitoring") }
+        var enabled by remember { mutableStateOf(initial?.enabled ?: true) }
+        var url by remember { mutableStateOf(initial?.url ?: "") }
+        var token by remember { mutableStateOf(initial?.token ?: "") }
+        var secret by remember { mutableStateOf(initial?.secret ?: "") }
+        var deviceId by remember { mutableStateOf(initial?.deviceId ?: "") }
+        var interval by remember { mutableStateOf((initial?.intervalSeconds ?: 60).toString()) }
+        var showAdvanced by remember {
+            mutableStateOf(initial?.secret?.isNotBlank() == true || initial?.deviceId?.isNotBlank() == true)
+        }
         var testResult by remember { mutableStateOf<Pair<Int, String>?>(null) }
         var testing by remember { mutableStateOf(false) }
-
-        // Muat ulang bila konfigurasi berubah dari luar (mis. service memperbarui statistik).
-        LaunchedEffect(heartbeat) {
-            enabled = heartbeat.enabled
-            url = heartbeat.url
-            token = heartbeat.token
-            secret = heartbeat.secret
-            deviceId = heartbeat.deviceId
-            interval = heartbeat.intervalSeconds.toString()
-        }
 
         Scaffold(
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
                 TopAppBar(
-                    title = { Text("Heartbeat Monitoring") },
+                    title = { Text(if (initial == null) "Tambah Heartbeat" else "Edit Heartbeat") },
                     navigationIcon = {
                         IconButton(onClick = onCancel) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "Kembali")
@@ -994,13 +1029,13 @@ class MainActivity : ComponentActivity() {
                         Icon(
                             Icons.Default.Favorite,
                             contentDescription = null,
-                            tint = if (heartbeat.enabled) Color(0xFF2E7D32) else Color.Gray
+                            tint = if (enabled) Color(0xFF2E7D32) else Color.Gray
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Heartbeat Monitoring", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             Text(
-                                text = if (heartbeat.enabled) "Aktif • tiap ${heartbeat.intervalSeconds.coerceAtLeast(30)}s"
+                                text = if (enabled) "Aktif • tiap ${(interval.toIntOrNull() ?: 60).coerceAtLeast(30)}s"
                                 else "Nonaktif",
                                 fontSize = 12.sp,
                                 color = Color.Gray
@@ -1016,6 +1051,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Nama / Label Heartbeat") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
             OutlinedTextField(
                 value = url,
                 onValueChange = { url = it },
@@ -1085,12 +1127,19 @@ class MainActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         val cfg = HeartbeatConfig(
+                            id = initial?.id ?: HeartbeatSender.generateId(),
+                            name = name.trim().ifEmpty { "Heartbeat Monitoring" },
                             enabled = enabled,
                             url = url.trim(),
                             token = token.trim(),
                             secret = secret.trim(),
                             deviceId = deviceId.trim(),
-                            intervalSeconds = interval.toIntOrNull() ?: 60
+                            intervalSeconds = interval.toIntOrNull() ?: 60,
+                            lastSentAt = initial?.lastSentAt ?: 0L,
+                            lastCode = initial?.lastCode ?: 0,
+                            lastResponse = initial?.lastResponse ?: "",
+                            totalSent = initial?.totalSent ?: 0,
+                            totalFailed = initial?.totalFailed ?: 0
                         )
                         if (enabled && (cfg.url.isBlank() || cfg.token.isBlank())) {
                             Toast.makeText(
@@ -1108,8 +1157,7 @@ class MainActivity : ComponentActivity() {
                             ).show()
                             return@Button
                         }
-                        HeartbeatStore.save(this@MainActivity, cfg)
-                        heartbeat = cfg
+                        HeartbeatStore.upsert(this@MainActivity, cfg)
                         HeartbeatService.sync(this@MainActivity)
                         Toast.makeText(this@MainActivity, "Konfigurasi Heartbeat disimpan", Toast.LENGTH_SHORT).show()
                         onSaved()
@@ -1142,17 +1190,28 @@ class MainActivity : ComponentActivity() {
                         }
                         testing = true
                         testResult = null
+                        val testCfg = HeartbeatConfig(
+                            id = initial?.id ?: "",
+                            enabled = true,
+                            url = url.trim(),
+                            token = token.trim(),
+                            secret = secret.trim(),
+                            deviceId = deviceId.trim(),
+                            intervalSeconds = interval.toIntOrNull() ?: 60
+                        )
                         executor.execute {
-                            val result = HeartbeatSender.send(cfg)
-                            HeartbeatStore.record(
-                                this@MainActivity,
-                                result.first,
-                                result.second,
-                                result.first in 200..299
-                            )
+                            val result = HeartbeatSender.send(testCfg)
+                            if (initial != null) {
+                                HeartbeatStore.record(
+                                    this@MainActivity,
+                                    initial.id,
+                                    result.first,
+                                    result.second,
+                                    result.first in 200..299
+                                )
+                            }
                             mainHandler.post {
                                 testing = false
-                                heartbeat = HeartbeatStore.load(this@MainActivity)
                                 testResult = result
                             }
                         }
@@ -1176,17 +1235,19 @@ class MainActivity : ComponentActivity() {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text("Statistik Pengiriman", fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text("Total terkirim: ${heartbeat.totalSent}", fontSize = 13.sp)
-                    Text("Total gagal: ${heartbeat.totalFailed}", fontSize = 13.sp)
-                    if (heartbeat.lastSentAt > 0) {
+                    Text("Total terkirim: ${initial?.totalSent ?: 0}", fontSize = 13.sp)
+                    Text("Total gagal: ${initial?.totalFailed ?: 0}", fontSize = 13.sp)
+                    val lastSentAt = initial?.lastSentAt ?: 0L
+                    if (lastSentAt > 0) {
                         val time = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault())
-                            .format(Date(heartbeat.lastSentAt))
-                        Text("Terakhir: $time (HTTP ${heartbeat.lastCode})", fontSize = 13.sp)
+                            .format(Date(lastSentAt))
+                        Text("Terakhir: $time (HTTP ${initial?.lastCode ?: 0})", fontSize = 13.sp)
                     }
-                    if (heartbeat.lastResponse.isNotEmpty()) {
+                    val lastResponse = initial?.lastResponse ?: ""
+                    if (lastResponse.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "Resp: ${heartbeat.lastResponse}",
+                            "Resp: $lastResponse",
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )

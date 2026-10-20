@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -21,7 +22,6 @@ import java.net.URL
 import java.security.SecureRandom
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -30,9 +30,12 @@ import javax.crypto.spec.SecretKeySpec
  * Konfigurasi Heartbeat Monitoring (viaQris `POST /api/v2/heartbeat`).
  *
  * Heartbeat memakai token dan (opsional) secret HMAC tersendiri, berbeda dari
- * webhook penerusan transaksi.
+ * webhook penerusan transaksi. Satu device boleh memiliki beberapa konfigurasi
+ * heartbeat sekaligus.
  */
 data class HeartbeatConfig(
+    val id: String = "",
+    val name: String = "",
     val enabled: Boolean = false,
     val url: String = "",
     val token: String = "",
@@ -48,64 +51,103 @@ data class HeartbeatConfig(
 
 object HeartbeatStore {
     const val PREFS_NAME = "viaqris_prefs"
-    private const val KEY = "heartbeat_json"
+    private const val KEY = "heartbeat_list_json"
+    private const val LEGACY_KEY = "heartbeat_json"
 
-    fun load(context: Context): HeartbeatConfig {
+    fun loadAll(context: Context): List<HeartbeatConfig> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val raw = prefs.getString(KEY, null) ?: return HeartbeatConfig()
-        return try {
-            val obj = JSONObject(raw)
-            HeartbeatConfig(
-                enabled = obj.optBoolean("enabled", false),
-                url = obj.optString("url", ""),
-                token = obj.optString("token", ""),
-                secret = obj.optString("secret", ""),
-                deviceId = obj.optString("deviceId", ""),
-                intervalSeconds = obj.optInt("intervalSeconds", 60),
-                lastSentAt = obj.optLong("lastSentAt", 0L),
-                lastCode = obj.optInt("lastCode", 0),
-                lastResponse = obj.optString("lastResponse", ""),
-                totalSent = obj.optInt("totalSent", 0),
-                totalFailed = obj.optInt("totalFailed", 0)
-            )
-        } catch (_: Exception) {
-            HeartbeatConfig()
+        val raw = prefs.getString(KEY, null)
+        if (raw != null) {
+            return try {
+                val arr = JSONArray(raw)
+                (0 until arr.length()).map { fromJson(arr.getJSONObject(it)) }
+            } catch (_: Exception) {
+                emptyList()
+            }
         }
+        // Migrasi dari format lama (satu objek).
+        val legacy = prefs.getString(LEGACY_KEY, null)
+        if (legacy != null) {
+            val migrated = try {
+                listOf(fromJson(JSONObject(legacy)))
+            } catch (_: Exception) {
+                emptyList()
+            }
+            saveAll(context, migrated)
+            prefs.edit().remove(LEGACY_KEY).apply()
+            return migrated
+        }
+        return emptyList()
     }
 
-    fun save(context: Context, config: HeartbeatConfig) {
-        val obj = JSONObject().apply {
-            put("enabled", config.enabled)
-            put("url", config.url)
-            put("token", config.token)
-            put("secret", config.secret)
-            put("deviceId", config.deviceId)
-            put("intervalSeconds", config.intervalSeconds)
-            put("lastSentAt", config.lastSentAt)
-            put("lastCode", config.lastCode)
-            put("lastResponse", config.lastResponse)
-            put("totalSent", config.totalSent)
-            put("totalFailed", config.totalFailed)
-        }
+    fun saveAll(context: Context, list: List<HeartbeatConfig>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(toJson(it)) }
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY, obj.toString())
+            .putString(KEY, arr.toString())
             .apply()
     }
 
-    /** Perbarui hanya hasil pengiriman terakhir tanpa menyentuh konfigurasi lain. */
-    fun record(context: Context, code: Int, response: String, success: Boolean) {
-        val current = load(context)
-        save(
-            context,
-            current.copy(
-                lastSentAt = System.currentTimeMillis(),
-                lastCode = code,
-                lastResponse = response.take(350),
-                totalSent = if (success) current.totalSent + 1 else current.totalSent,
-                totalFailed = if (success) current.totalFailed else current.totalFailed + 1
-            )
+    fun upsert(context: Context, config: HeartbeatConfig) {
+        val list = loadAll(context).toMutableList()
+        val idx = list.indexOfFirst { it.id == config.id }
+        if (idx >= 0) list[idx] = config else list.add(config)
+        saveAll(context, list)
+    }
+
+    fun remove(context: Context, id: String) {
+        saveAll(context, loadAll(context).filterNot { it.id == id })
+    }
+
+    fun isConfigured(context: Context): Boolean = loadAll(context).isNotEmpty()
+
+    /** Perbarui hanya hasil pengiriman konfigurasi tertentu. */
+    fun record(context: Context, id: String, code: Int, response: String, success: Boolean) {
+        val list = loadAll(context).toMutableList()
+        val idx = list.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        val current = list[idx]
+        list[idx] = current.copy(
+            lastSentAt = System.currentTimeMillis(),
+            lastCode = code,
+            lastResponse = response.take(350),
+            totalSent = if (success) current.totalSent + 1 else current.totalSent,
+            totalFailed = if (success) current.totalFailed else current.totalFailed + 1
         )
+        saveAll(context, list)
+    }
+
+    private fun fromJson(obj: JSONObject): HeartbeatConfig = HeartbeatConfig(
+        id = obj.optString("id", ""),
+        name = obj.optString("name", ""),
+        enabled = obj.optBoolean("enabled", false),
+        url = obj.optString("url", ""),
+        token = obj.optString("token", ""),
+        secret = obj.optString("secret", ""),
+        deviceId = obj.optString("deviceId", ""),
+        intervalSeconds = obj.optInt("intervalSeconds", 60),
+        lastSentAt = obj.optLong("lastSentAt", 0L),
+        lastCode = obj.optInt("lastCode", 0),
+        lastResponse = obj.optString("lastResponse", ""),
+        totalSent = obj.optInt("totalSent", 0),
+        totalFailed = obj.optInt("totalFailed", 0)
+    )
+
+    private fun toJson(config: HeartbeatConfig): JSONObject = JSONObject().apply {
+        put("id", config.id)
+        put("name", config.name)
+        put("enabled", config.enabled)
+        put("url", config.url)
+        put("token", config.token)
+        put("secret", config.secret)
+        put("deviceId", config.deviceId)
+        put("intervalSeconds", config.intervalSeconds)
+        put("lastSentAt", config.lastSentAt)
+        put("lastCode", config.lastCode)
+        put("lastResponse", config.lastResponse)
+        put("totalSent", config.totalSent)
+        put("totalFailed", config.totalFailed)
     }
 }
 
@@ -185,57 +227,69 @@ object HeartbeatSender {
         val rnd = SecureRandom()
         return (1..length).map { chars[rnd.nextInt(chars.length)] }.joinToString("")
     }
+
+    fun generateId(): String = System.currentTimeMillis().toString() + "-" +
+        SecureRandom().nextInt(100000).toString()
 }
 
 /**
  * Foreground service yang mengirim heartbeat secara berkala sesuai interval
- * konfigurasi. Berjalan independen dari listener notifikasi.
+ * masing-masing konfigurasi. Berjalan independen dari listener notifikasi.
  */
 class HeartbeatService : Service() {
     private var scheduler: ScheduledExecutorService? = null
-    private var task: ScheduledFuture<*>? = null
+    private val lastSent = mutableMapOf<String, Long>()
 
     override fun onCreate() {
         super.onCreate()
         startForegroundCompat()
-        scheduleNext()
+        scheduleTick()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
-        // Jadwal ulang agar perubahan interval langsung berlaku.
-        task?.cancel(false)
-        scheduleNext()
+        scheduleTick()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        task?.cancel(true)
         scheduler?.shutdownNow()
         scheduler = null
         super.onDestroy()
     }
 
-    private fun scheduleNext() {
-        val config = HeartbeatStore.load(this)
-        if (!config.enabled) {
+    private fun scheduleTick() {
+        val configs = HeartbeatStore.loadAll(this).filter {
+            it.enabled && it.url.isNotBlank() && it.token.isNotBlank()
+        }
+        if (configs.isEmpty()) {
             stopSelf()
             return
         }
 
-        val interval = config.intervalSeconds.coerceAtLeast(30).toLong()
+        // Tick tiap detik; kirim konfigurasi yang sudah mencapai intervalnya.
         val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
-        task = exec.scheduleAtFixedRate({
-            val current = HeartbeatStore.load(this)
-            if (!current.enabled) {
+        exec.scheduleAtFixedRate({
+            val current = HeartbeatStore.loadAll(this).filter {
+                it.enabled && it.url.isNotBlank() && it.token.isNotBlank()
+            }
+            if (current.isEmpty()) {
                 stopSelf()
                 return@scheduleAtFixedRate
             }
-            val (code, resp) = HeartbeatSender.send(current)
-            HeartbeatStore.record(this, code, resp, code in 200..299)
-        }, 0, interval, TimeUnit.SECONDS)
+            val now = System.currentTimeMillis()
+            for (cfg in current) {
+                val intervalMs = cfg.intervalSeconds.coerceAtLeast(30) * 1000L
+                val prev = lastSent[cfg.id] ?: 0L
+                if (now - prev >= intervalMs) {
+                    lastSent[cfg.id] = now
+                    val (code, resp) = HeartbeatSender.send(cfg)
+                    HeartbeatStore.record(this, cfg.id, code, resp, code in 200..299)
+                }
+            }
+        }, 0, 1, TimeUnit.SECONDS)
     }
 
     private fun startForegroundCompat() {
@@ -285,11 +339,13 @@ class HeartbeatService : Service() {
         private const val CHANNEL_ID = "viaqris_heartbeat_channel"
         private const val NOTIF_ID = 7789
 
-        /** Mulai atau hentikan service sesuai status `enabled` di konfigurasi. */
+        /** Mulai atau hentikan service sesuai ada/tidaknya konfigurasi aktif. */
         fun sync(context: Context) {
-            val config = HeartbeatStore.load(context)
+            val hasActive = HeartbeatStore.loadAll(context).any {
+                it.enabled && it.url.isNotBlank() && it.token.isNotBlank()
+            }
             val intent = Intent(context, HeartbeatService::class.java)
-            if (config.enabled && config.url.isNotBlank() && config.token.isNotBlank()) {
+            if (hasActive) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
                 } else {
