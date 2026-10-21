@@ -1200,7 +1200,7 @@ class MainActivity : ComponentActivity() {
                             intervalSeconds = interval.toIntOrNull() ?: 60
                         )
                         executor.execute {
-                            val result = HeartbeatSender.send(testCfg)
+                            val result = HeartbeatSender.send(testCfg, applicationContext)
                             if (initial != null) {
                                 HeartbeatStore.record(
                                     this@MainActivity,

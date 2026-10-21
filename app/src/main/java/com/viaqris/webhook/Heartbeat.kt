@@ -5,12 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -156,7 +158,7 @@ object HeartbeatSender {
      * Mengirim satu heartbeat. Bila `secret` diisi, ditandatangani HMAC-SHA256
      * atas `timestamp.body` sesuai yang diterima server viaQris.
      */
-    fun send(config: HeartbeatConfig): Pair<Int, String> {
+    fun send(config: HeartbeatConfig, context: Context? = null): Pair<Int, String> {
         if (config.url.isBlank() || config.token.isBlank()) {
             return -1 to "URL / Token Heartbeat belum diisi"
         }
@@ -164,8 +166,8 @@ object HeartbeatSender {
         val bodyObj = JSONObject().apply {
             put("device_id", config.deviceId.ifBlank { Build.MODEL })
             put("app_version", BuildConfig.VERSION_NAME)
-            put("listener_connected", true)
-            put("battery_optimized", false)
+            put("listener_connected", context?.let { isListenerEnabled(it) } ?: true)
+            put("battery_optimized", context?.let { isBatteryOptimized(it) } ?: false)
             put("sent_at", System.currentTimeMillis() / 1000)
         }
         val body = bodyObj.toString()
@@ -230,6 +232,28 @@ object HeartbeatSender {
 
     fun generateId(): String = System.currentTimeMillis().toString() + "-" +
         SecureRandom().nextInt(100000).toString()
+
+    /** True bila app dikecualikan dari optimisasi baterai (Doze). */
+    fun isBatteryOptimized(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        return !pm.isIgnoringBatteryOptimizations(context.packageName)
+    }
+
+    /** True bila NotificationListenerService app ini sedang aktif. */
+    fun isListenerEnabled(context: Context): Boolean {
+        val flat = Settings.Secure.getString(
+            context.contentResolver,
+            "enabled_notification_listeners"
+        )
+        if (!flat.isNullOrEmpty()) {
+            for (name in flat.split(":")) {
+                val cn = ComponentName.unflattenFromString(name)
+                if (cn != null && cn.packageName == context.packageName) return true
+            }
+        }
+        return false
+    }
 }
 
 /**
@@ -285,7 +309,7 @@ class HeartbeatService : Service() {
                 val prev = lastSent[cfg.id] ?: 0L
                 if (now - prev >= intervalMs) {
                     lastSent[cfg.id] = now
-                    val (code, resp) = HeartbeatSender.send(cfg)
+                    val (code, resp) = HeartbeatSender.send(cfg, this@HeartbeatService)
                     HeartbeatStore.record(this, cfg.id, code, resp, code in 200..299)
                 }
             }
@@ -354,14 +378,6 @@ class HeartbeatService : Service() {
             } else {
                 context.stopService(intent)
             }
-        }
-
-        @Suppress("unused")
-        fun isBatteryOptimized(context: Context): Boolean {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                !pm.isIgnoringBatteryOptimizations(context.packageName)
-            } else false
         }
     }
 }
