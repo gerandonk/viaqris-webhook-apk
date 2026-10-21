@@ -494,11 +494,11 @@ class MainActivity : ComponentActivity() {
             topBar = {
                 TopAppBar(
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.verticalAlignment(Alignment.CenterVertically)) {
                             Image(
-                                painter = painterResource(id = R.drawable.app_logo),
+                                painter = painterResource(id = R.mipmap.ic_launcher),
                                 contentDescription = "Logo ViaQRIS",
-                                modifier = Modifier.size(30.dp)
+                                size = Size(30.dp.toPx()),
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text("ViaQRIS Webhook", fontWeight = FontWeight.Bold)
@@ -1763,35 +1763,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-fun ViaQrisLogo(
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier.size(160.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Image(
-            painter = painterResource(id = R.drawable.app_logo),
-            contentDescription = "ViaQRIS Logo Emblem",
-            modifier = Modifier.fillMaxSize()
-        )
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun ViaQrisLogoPreview() {
-    MaterialTheme {
-        Surface(
-            modifier = Modifier.padding(16.dp),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            ViaQrisLogo()
         }
     }
 }
