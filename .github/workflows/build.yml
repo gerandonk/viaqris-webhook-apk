@@ -1,8 +1,8 @@
-name: Build Native ViaQRIS Webhook APK
+name: Build Native ViaQRIS Webhook APK Developer
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "dev" ]
   workflow_dispatch:
 
 jobs:
@@ -31,4 +31,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ViaQRIS-Webhook-Native-APK
-          path: app/build/outputs/apk/release/app-release.apk
+          path: app/build/outputs/apk/release/app-release-dev.apk
