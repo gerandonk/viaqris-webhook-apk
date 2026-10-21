@@ -493,11 +493,11 @@ class MainActivity : ComponentActivity() {
             topBar = {
                 TopAppBar(
                     title = {
-                        Row(Modifier.verticalAlignment(Alignment.CenterVertically)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Image(
-                                painter = painterResource(id = R.mipmap.ic_launcher),
+                                painter = painterResource(id = R.drawable.logo_viaqris),
                                 contentDescription = "Logo ViaQRIS",
-                                size = Size(30.dp.toPx()),
+                                modifier = Modifier.size(30.dp)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text("ViaQRIS Webhook", fontWeight = FontWeight.Bold)
