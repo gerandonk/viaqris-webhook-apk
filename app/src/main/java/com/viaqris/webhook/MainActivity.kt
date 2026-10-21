@@ -495,7 +495,7 @@ class MainActivity : ComponentActivity() {
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Image(
-                                painter = painterResource(id = R.drawable.ic_launcher),
+                                painter = painterResource(id = R.mipmap.ic_launcher),
                                 contentDescription = "Logo ViaQRIS",
                                 modifier = Modifier.size(30.dp)
                             )
@@ -1200,7 +1200,7 @@ class MainActivity : ComponentActivity() {
                             intervalSeconds = interval.toIntOrNull() ?: 60
                         )
                         executor.execute {
-                            val result = HeartbeatSender.send(testCfg)
+                            val result = HeartbeatSender.send(testCfg, applicationContext)
                             if (initial != null) {
                                 HeartbeatStore.record(
                                     this@MainActivity,
