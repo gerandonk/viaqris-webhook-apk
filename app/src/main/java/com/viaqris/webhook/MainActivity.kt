@@ -495,7 +495,7 @@ class MainActivity : ComponentActivity() {
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Image(
-                                painter = painterResource(id = R.drawable.ic_launcher),
+                                painter = painterResource(id = R.drawable.logo_viaqris),
                                 contentDescription = "Logo ViaQRIS",
                                 modifier = Modifier.size(30.dp)
                             )
