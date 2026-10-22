@@ -4,38 +4,34 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Background Biru ViaQRIS -->
-    <path
-        android:fillColor="#0F62FE"
-        android:pathData="M24,6 L84,6 C93.94,6 102,14.06 102,24 L102,84 C102,93.94 93.94,102 84,102 L24,102 C14.06,102 6,93.94 6,84 L6,24 C6,14.06 14.06,6 24,6 Z" />
-
-    <!-- Lingkaran Aksen Dalam -->
-    <path
-        android:fillColor="#0043CE"
-        android:pathData="M54,18 C73.88,18 90,34.12 90,54 C90,73.88 73.88,90 54,90 C34.12,90 18,73.88 18,54 C18,34.12 34.12,18 54,18 Z" />
-
-    <!-- Sudut Bingkai QR Kiri Atas -->
+    <!-- Latar putih bersih (sesuai logo viaQris) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M28,28 L44,28 L44,34 L34,34 L34,44 L28,44 Z" />
+        android:pathData="M0,0h108v108h-108z" />
 
-    <!-- Sudut Bingkai QR Kanan Atas -->
+    <!-- Bingkai luar biru tua -->
+    <path
+        android:fillColor="#023761"
+        android:pathData="M20,14 L88,14 C91.3,14 94,16.7 94,20 L94,88 C94,91.3 91.3,94 88,94 L20,94 C16.7,94 14,91.3 14,88 L14,20 C14,16.7 16.7,14 20,14 Z" />
+
+    <!-- Bidang dalam biru muda -->
+    <path
+        android:fillColor="#0B71A2"
+        android:pathData="M26,20 L82,20 C85.3,20 88,22.7 88,26 L88,82 C88,85.3 85.3,88 82,88 L26,88 C22.7,88 20,85.3 20,82 L20,26 C20,22.7 22.7,20 26,20 Z" />
+
+    <!-- Tiga finder pattern QRIS (putih) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M64,28 L80,28 L80,44 L74,44 L74,34 L64,34 Z" />
-
-    <!-- Sudut Bingkai QR Kiri Bawah -->
+        android:pathData="M30,30 L30,44 L44,44 L44,30 Z M36,36 L36,38 L38,38 L38,36 Z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M28,64 L34,64 L34,74 L44,74 L44,80 L28,80 Z" />
-
-    <!-- Sudut Bingkai QR Kanan Bawah -->
+        android:pathData="M64,30 L64,44 L78,44 L78,30 Z M70,36 L70,38 L72,38 L72,36 Z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M74,64 L80,64 L80,80 L64,80 L64,74 L74,74 Z" />
+        android:pathData="M30,64 L30,78 L44,78 L44,64 Z M36,70 L36,72 L38,72 L38,70 Z" />
 
-    <!-- Simbol Petir / Webhook Forward di Tengah -->
+    <!-- Titik data QR (putih) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M57,32 L41,56 L53,56 L49,76 L67,50 L55,50 Z" />
+        android:pathData="M50,30 L54,30 L54,34 L50,34 Z M58,30 L62,30 L62,34 L58,34 Z M50,38 L54,38 L54,42 L50,42 Z M58,38 L62,38 L62,42 L58,42 Z M52,48 L56,48 L56,52 L52,52 Z M60,48 L64,48 L64,52 L60,52 Z M64,48 L78,48 L78,58 L64,58 Z M50,58 L60,58 L60,62 L50,62 Z M52,66 L56,66 L56,70 L52,70 Z M60,66 L64,66 L64,70 L60,70 Z M68,66 L72,66 L72,70 L68,70 Z M52,74 L56,74 L56,78 L52,78 Z M60,74 L64,74 L64,78 L60,78 Z M68,74 L72,74 L72,78 L68,78 Z" />
 </vector>

@@ -1,0 +1,37 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Latar putih -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,6 C80.5,6 102,27.5 102,54 C102,80.5 80.5,102 54,102 C27.5,102 6,80.5 6,54 C6,27.5 27.5,6 54,6 Z" />
+
+    <!-- Cincin biru tua -->
+    <path
+        android:fillColor="#023761"
+        android:pathData="M54,12 C77.2,12 96,30.8 96,54 C96,77.2 77.2,96 54,96 C30.8,96 12,77.2 12,54 C12,30.8 30.8,12 54,12 Z" />
+
+    <!-- Bidang dalam biru muda -->
+    <path
+        android:fillColor="#0B71A2"
+        android:pathData="M54,22 C71.7,22 86,36.3 86,54 C86,71.7 71.7,86 54,86 C36.3,86 22,71.7 22,54 C22,36.3 36.3,22 54,22 Z" />
+
+    <!-- Finder pattern QRIS (putih) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,32 L32,46 L46,46 L46,32 Z M38,38 L38,40 L40,40 L40,38 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,32 L62,46 L76,46 L76,32 Z M68,38 L68,40 L70,40 L70,38 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,62 L32,76 L46,76 L46,62 Z M38,68 L38,70 L40,70 L40,68 Z" />
+
+    <!-- Titik data QR (putih) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,32 L56,32 L56,36 L52,36 Z M60,32 L64,32 L64,36 L60,36 Z M52,40 L56,40 L56,44 L52,44 Z M60,40 L64,40 L64,44 L60,44 Z M52,52 L56,52 L56,56 L52,56 Z M60,52 L64,52 L64,56 L60,56 Z M62,52 L74,52 L74,60 L62,60 Z M52,62 L60,62 L60,66 L52,66 Z M54,68 L58,68 L58,72 L54,72 Z M62,68 L66,68 L66,72 L62,72 Z M54,74 L58,74 L58,78 L54,78 Z M62,74 L66,74 L66,78 L62,78 Z" />
+</vector>

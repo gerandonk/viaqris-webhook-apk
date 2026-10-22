@@ -28,8 +28,8 @@
 
     <application
         android:label="ViaQRIS Webhook"
-        android:icon="@drawable/ic_launcher"
-        android:roundIcon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
@@ -59,6 +59,18 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Memantau notifikasi transaksi pembayaran QRIS secara real-time untuk diteruskan ke server webhook merchant." />
+        </service>
+
+        <!-- Foreground service pengirim heartbeat berkala ke server viaQris -->
+        <service
+            android:name=".HeartbeatService"
+            android:label="ViaQRIS Heartbeat"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Mengirim sinyal heartbeat berkala agar status perangkat tetap terpantau di server viaQris." />
         </service>
 
         <!-- Receiver agar otomatis aktif kembali saat HP di-restart -->

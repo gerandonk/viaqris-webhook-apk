@@ -59,6 +59,9 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 
 data class WebhookItem(
@@ -103,6 +106,7 @@ class MainActivity : ComponentActivity() {
     private var batteryIgnored by mutableStateOf(false)
     private var webhooks by mutableStateOf(listOf<WebhookItem>())
     private var logs by mutableStateOf(listOf<LogItem>())
+    private var heartbeats by mutableStateOf(listOf<HeartbeatConfig>())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -143,6 +147,7 @@ class MainActivity : ComponentActivity() {
         }
         loadWebhooksFromPrefs()
         loadLogsFromPrefs()
+        heartbeats = HeartbeatStore.loadAll(this)
     }
 
     private fun rebindListenerService() {
@@ -440,6 +445,9 @@ class MainActivity : ComponentActivity() {
         var editingWebhook by remember { mutableStateOf<WebhookItem?>(null) }
         var editingIndex by remember { mutableIntStateOf(-1) }
         var showForm by remember { mutableStateOf(false) }
+        var showAddChooser by remember { mutableStateOf(false) }
+        var showHeartbeatForm by remember { mutableStateOf(false) }
+        var editingHeartbeat by remember { mutableStateOf<HeartbeatConfig?>(null) }
         var forceShowPermissions by remember { mutableStateOf(false) }
 
         var testTargetWebhook by remember { mutableStateOf<WebhookItem?>(null) }
@@ -463,6 +471,18 @@ class MainActivity : ComponentActivity() {
                     }
                     saveWebhooksToPrefs(mutable)
                     showForm = false
+                }
+            )
+            return
+        }
+
+        if (showHeartbeatForm) {
+            HeartbeatFormScreen(
+                initial = editingHeartbeat,
+                onCancel = { showHeartbeatForm = false },
+                onSaved = {
+                    heartbeats = HeartbeatStore.loadAll(this)
+                    showHeartbeatForm = false
                 }
             )
             return
@@ -507,10 +527,10 @@ class MainActivity : ComponentActivity() {
                         onClick = {
                             editingWebhook = null
                             editingIndex = -1
-                            showForm = true
+                            showAddChooser = true
                         },
                         icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                        text = { Text("Tambah Webhook") }
+                        text = { Text("Tambah") }
                     )
                 }
             },
@@ -548,11 +568,64 @@ class MainActivity : ComponentActivity() {
                     },
                     onTest = { item ->
                         testTargetWebhook = item
+                    },
+                    onEditHeartbeat = { cfg ->
+                        editingHeartbeat = cfg
+                        showHeartbeatForm = true
                     }
                 )
             } else {
                 LogsTab(modifier = Modifier.padding(innerPadding))
             }
+        }
+
+        if (showAddChooser) {
+            AlertDialog(
+                onDismissRequest = { showAddChooser = false },
+                title = { Text("Tambah Baru") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Pilih jenis konfigurasi yang ingin ditambahkan:", fontSize = 13.sp)
+                        Button(
+                            onClick = {
+                                showAddChooser = false
+                                editingWebhook = null
+                                editingIndex = -1
+                                showForm = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Webhook, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Webhook Penerusan Transaksi")
+                        }
+                        val heartbeatConfigured = heartbeats.isNotEmpty()
+                        OutlinedButton(
+                            onClick = {
+                                showAddChooser = false
+                                editingHeartbeat = null
+                                showHeartbeatForm = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Favorite, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Heartbeat Monitoring")
+                        }
+                        if (heartbeatConfigured) {
+                            Text(
+                                "Sudah ada ${heartbeats.size} heartbeat terdaftar. Tambahkan lagi bila perlu, atau kelola dari daftar di Dashboard.",
+                                fontSize = 11.sp,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showAddChooser = false }) { Text("Batal") }
+                }
+            )
         }
 
         testTargetWebhook?.let { target ->
@@ -632,7 +705,8 @@ class MainActivity : ComponentActivity() {
         modifier: Modifier = Modifier,
         showPermissionCard: Boolean,
         onEdit: (WebhookItem, Int) -> Unit,
-        onTest: (WebhookItem) -> Unit
+        onTest: (WebhookItem) -> Unit,
+        onEditHeartbeat: (HeartbeatConfig) -> Unit
     ) {
         LazyColumn(
             modifier = modifier.fillMaxSize(),
@@ -641,6 +715,33 @@ class MainActivity : ComponentActivity() {
         ) {
             if (showPermissionCard) {
                 item { PermissionCard() }
+            }
+
+            if (heartbeats.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Heartbeat Monitoring (${heartbeats.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                itemsIndexed(heartbeats) { idx, cfg ->
+                    HeartbeatCard(
+                        config = cfg,
+                        onEdit = { onEditHeartbeat(cfg) },
+                        onToggle = { checked ->
+                            val updated = cfg.copy(enabled = checked)
+                            HeartbeatStore.upsert(this@MainActivity, updated)
+                            heartbeats = HeartbeatStore.loadAll(this@MainActivity)
+                            HeartbeatService.sync(this@MainActivity)
+                        },
+                        onDelete = {
+                            HeartbeatStore.remove(this@MainActivity, cfg.id)
+                            heartbeats = HeartbeatStore.loadAll(this@MainActivity)
+                            HeartbeatService.sync(this@MainActivity)
+                        }
+                    )
+                }
             }
 
             item {
@@ -668,7 +769,7 @@ class MainActivity : ComponentActivity() {
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                "Belum ada Webhook ditambahkan.\nTekan tombol '+ Tambah Webhook' di kanan bawah.",
+                                "Belum ada Webhook ditambahkan.\nTekan tombol '+ Tambah' di kanan bawah, lalu pilih Webhook.",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
@@ -787,8 +888,392 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun PermissionCard() {
-        val allReady = notifListenerGranted && postNotifGranted && batteryIgnored
+    fun HeartbeatCard(
+        config: HeartbeatConfig,
+        onEdit: () -> Unit,
+        onToggle: (Boolean) -> Unit,
+        onDelete: () -> Unit
+    ) {
+        val ok = config.lastCode in 200..299
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Favorite,
+                        contentDescription = null,
+                        tint = if (config.enabled) Color(0xFF2E7D32) else Color.Gray
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = config.name.ifBlank { "Heartbeat Monitoring" },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        Text(
+                            text = if (config.enabled)
+                                "Aktif • tiap ${config.intervalSeconds.coerceAtLeast(30)}s"
+                            else "Nonaktif",
+                            fontSize = 12.sp,
+                            color = Color.Gray
+                        )
+                    }
+                    Switch(checked = config.enabled, onCheckedChange = onToggle)
+                }
+                if (config.url.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = config.url,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFE8F5E9)) {
+                        Text(
+                            text = "✓ Terkirim: ${config.totalSent}",
+                            color = Color(0xFF2E7D32),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFFFEBEE)) {
+                        Text(
+                            text = "✗ Gagal: ${config.totalFailed}",
+                            color = Color(0xFFC62828),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+                if (config.lastSentAt > 0) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    val time = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault())
+                        .format(Date(config.lastSentAt))
+                    Text(
+                        text = "Terakhir: $time (HTTP ${config.lastCode})" +
+                            if (config.lastResponse.isNotEmpty()) " • ${config.lastResponse}" else "",
+                        fontSize = 12.sp,
+                        color = if (ok) Color(0xFF2E7D32) else Color(0xFFC62828)
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(onClick = onEdit) {
+                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Edit")
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.Red)
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun HeartbeatFormScreen(
+        initial: HeartbeatConfig?,
+        onCancel: () -> Unit,
+        onSaved: () -> Unit
+    ) {
+        var name by remember { mutableStateOf(initial?.name ?: "Heartbeat Monitoring") }
+        var enabled by remember { mutableStateOf(initial?.enabled ?: true) }
+        var url by remember { mutableStateOf(initial?.url ?: "") }
+        var token by remember { mutableStateOf(initial?.token ?: "") }
+        var secret by remember { mutableStateOf(initial?.secret ?: "") }
+        var deviceId by remember { mutableStateOf(initial?.deviceId ?: "") }
+        var interval by remember { mutableStateOf((initial?.intervalSeconds ?: 60).toString()) }
+        var showAdvanced by remember {
+            mutableStateOf(initial?.secret?.isNotBlank() == true || initial?.deviceId?.isNotBlank() == true)
+        }
+        var testResult by remember { mutableStateOf<Pair<Int, String>?>(null) }
+        var testing by remember { mutableStateOf(false) }
+
+        Scaffold(
+            contentWindowInsets = WindowInsets.safeDrawing,
+            topBar = {
+                TopAppBar(
+                    title = { Text(if (initial == null) "Tambah Heartbeat" else "Edit Heartbeat") },
+                    navigationIcon = {
+                        IconButton(onClick = onCancel) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Kembali")
+                        }
+                    }
+                )
+            }
+        ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Favorite,
+                            contentDescription = null,
+                            tint = if (enabled) Color(0xFF2E7D32) else Color.Gray
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Heartbeat Monitoring", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(
+                                text = if (enabled) "Aktif • tiap ${(interval.toIntOrNull() ?: 60).coerceAtLeast(30)}s"
+                                else "Nonaktif",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(checked = enabled, onCheckedChange = { enabled = it })
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Mengirim sinyal berkala ke server viaQris agar perangkat terpantau online/offline pada halaman donasi.",
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Nama / Label Heartbeat") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                label = { Text("URL Server viaQris") },
+                placeholder = { Text("https://domain-anda.com") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = token,
+                onValueChange = { token = it },
+                label = { Text("Token Heartbeat") },
+                placeholder = { Text("Dari Panel Admin → Heartbeat Monitoring") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Pengaturan Lanjutan (HMAC & Device ID)", fontWeight = FontWeight.Medium)
+                    Text(
+                        "Isi Secret HMAC bila diaktifkan di server; Device ID opsional (default nama model HP).",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
+                Switch(checked = showAdvanced, onCheckedChange = { showAdvanced = it })
+            }
+
+            if (showAdvanced) {
+                OutlinedTextField(
+                    value = deviceId,
+                    onValueChange = { deviceId = it },
+                    label = { Text("Device ID (opsional)") },
+                    placeholder = { Text(Build.MODEL) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = secret,
+                    onValueChange = { secret = it },
+                    label = { Text("Secret HMAC (opsional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = interval,
+                        onValueChange = { interval = it.filter { c -> c.isDigit() } },
+                        label = { Text("Interval (detik)") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    FilledTonalButton(
+                        onClick = { secret = HeartbeatSender.generateSecret() },
+                        modifier = Modifier.height(56.dp)
+                    ) {
+                        Text("Generate Secret")
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = {
+                        val cfg = HeartbeatConfig(
+                            id = initial?.id ?: HeartbeatSender.generateId(),
+                            name = name.trim().ifEmpty { "Heartbeat Monitoring" },
+                            enabled = enabled,
+                            url = url.trim(),
+                            token = token.trim(),
+                            secret = secret.trim(),
+                            deviceId = deviceId.trim(),
+                            intervalSeconds = interval.toIntOrNull() ?: 60,
+                            lastSentAt = initial?.lastSentAt ?: 0L,
+                            lastCode = initial?.lastCode ?: 0,
+                            lastResponse = initial?.lastResponse ?: "",
+                            totalSent = initial?.totalSent ?: 0,
+                            totalFailed = initial?.totalFailed ?: 0
+                        )
+                        if (enabled && (cfg.url.isBlank() || cfg.token.isBlank())) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "URL dan Token Heartbeat wajib diisi!",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return@Button
+                        }
+                        if (enabled && !cfg.url.startsWith("http")) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "URL harus diawali http:// atau https://",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return@Button
+                        }
+                        HeartbeatStore.upsert(this@MainActivity, cfg)
+                        HeartbeatService.sync(this@MainActivity)
+                        Toast.makeText(this@MainActivity, "Konfigurasi Heartbeat disimpan", Toast.LENGTH_SHORT).show()
+                        onSaved()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Simpan")
+                }
+                OutlinedButton(
+                    onClick = {
+                        val cfg = HeartbeatConfig(
+                            enabled = true,
+                            url = url.trim(),
+                            token = token.trim(),
+                            secret = secret.trim(),
+                            deviceId = deviceId.trim(),
+                            intervalSeconds = interval.toIntOrNull() ?: 60
+                        )
+                        if (cfg.url.isBlank() || cfg.token.isBlank()) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Isi URL dan Token terlebih dahulu",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return@OutlinedButton
+                        }
+                        testing = true
+                        testResult = null
+                        val testCfg = HeartbeatConfig(
+                            id = initial?.id ?: "",
+                            enabled = true,
+                            url = url.trim(),
+                            token = token.trim(),
+                            secret = secret.trim(),
+                            deviceId = deviceId.trim(),
+                            intervalSeconds = interval.toIntOrNull() ?: 60
+                        )
+                        executor.execute {
+                            val result = HeartbeatSender.send(testCfg, applicationContext)
+                            if (initial != null) {
+                                HeartbeatStore.record(
+                                    this@MainActivity,
+                                    initial.id,
+                                    result.first,
+                                    result.second,
+                                    result.first in 200..299
+                                )
+                            }
+                            mainHandler.post {
+                                testing = false
+                                testResult = result
+                            }
+                        }
+                    },
+                    enabled = !testing,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                ) {
+                    if (testing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Send, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Test Kirim")
+                    }
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("Statistik Pengiriman", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("Total terkirim: ${initial?.totalSent ?: 0}", fontSize = 13.sp)
+                    Text("Total gagal: ${initial?.totalFailed ?: 0}", fontSize = 13.sp)
+                    val lastSentAt = initial?.lastSentAt ?: 0L
+                    if (lastSentAt > 0) {
+                        val time = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault())
+                            .format(Date(lastSentAt))
+                        Text("Terakhir: $time (HTTP ${initial?.lastCode ?: 0})", fontSize = 13.sp)
+                    }
+                    val lastResponse = initial?.lastResponse ?: ""
+                    if (lastResponse.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Resp: $lastResponse",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    if (testResult != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val ok = testResult!!.first in 200..299
+                        Surface(shape = RoundedCornerShape(6.dp), color = if (ok) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)) {
+                            Text(
+                                text = if (ok) "✓ Heartbeat berhasil (HTTP ${testResult!!.first})"
+                                else "✗ Heartbeat gagal (HTTP ${testResult!!.first})",
+                                color = if (ok) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    @Composable
+    fun PermissionCard() {        val allReady = notifListenerGranted && postNotifGranted && batteryIgnored
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

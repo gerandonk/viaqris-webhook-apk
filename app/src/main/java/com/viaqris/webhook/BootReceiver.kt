@@ -97,6 +97,7 @@ class BootReceiver : BroadcastReceiver() {
                 )
             } catch (_: Exception) {}
         }
+        HeartbeatService.sync(context)
     }
 }
 
